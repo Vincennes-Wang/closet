@@ -51,7 +51,8 @@
 - 平台：PWA，托管在 GitHub Pages。无构建步骤，无后端。第三方库只用 CDN 引入，并固定版本号。
 - 个人数据（衣物照片、搭配）只存在用户浏览器的 IndexedDB 中，绝不进仓库。
 - 应用内抠图：RMBG-1.4（`briaai/RMBG-1.4`，Bria 非商用许可，允许个人非商用使用）。模型 ID 只在一个配置常量里定义（spike 中为 `MATTING_MODELS.rmbg.id`），换模型只改这一处。
-- 保底方案：iOS 系统抠图（"文件"App 多选后批量"移除背景"，或在照片里长按"拷贝主体"）。应用接收透明 PNG（文件导入或粘贴）。
+- 抠图是可选功能（2026-10-11 决策）：原图直接录入，应用完整可用。阶段 5 给每件衣物加"去背景"按钮，应用内用 RMBG 逐张处理。仍接收透明 PNG（例如别处抠好的图）。
+- ~~保底方案：iOS 系统抠图~~ — 已否决（2026-10-11）：用户在 iPhone 上实测做不到，而且操作不方便。应用内不再提示用户去"文件"App 移除背景。
 - 商用前置条件：如果以后收费或商用，必须先替换抠图模型，或购买 Bria 商业许可。替换候选（2026-10-10 核实）：`studioludens/birefnet-lite-512`（MIT，同类 `onnx-community/BiRefNet_512x512-ONNX` 也是 MIT）、`Xenova/slimsam-77-uniform`（SlimSAM，Apache-2.0，需要点选提示，不是全自动）。
 - 其他模型（分类等）仍优先选 MIT / Apache-2.0。
 - 页面"关于"区域注明使用了 RMBG-1.4 及其许可。
@@ -60,12 +61,12 @@
 ### 阶段 0 结论（2026-10-11）
 - iPhone 上 RMBG-1.4 的内存在整个页面生命周期内累积。终止 Worker 不能释放这部分内存。
 - 阶段 5 接入 AI 抠图：每批 3 张，结果存 IndexedDB，然后自动刷新页面续传下一批。验收标准：连续 3 批共 9 张不崩溃。
-- iOS 系统抠图（透明 PNG）始终作为批量录入和兜底方案。
+- ~~iOS 系统抠图作为兜底~~ — 已否决，见上方"抠图是可选功能"。
 - 分类模型：fashionSigLIP q4f16，只加载图像模型，在 Worker 中运行（阶段 5 接入）。
 
 ### 阶段 1 决策（2026-10-11）
 - 图片存储格式：长边缩到 1024，不存原图。有透明区域的图存 WebP；浏览器不能输出带透明的 WebP 时存 PNG。没有透明区域的图存 JPEG 0.9。启动时用 `image.js` 的 `probeWebpAlpha()` 检测，结果显示在页面"关于"区。
-- WebP 透明实测：Mac Chrome 155 可以；Mac Safari 27.0.1 不可以（`toBlob('image/webp')` 返回 `image/png`），所以 Safari 上透明图存 PNG。iPhone：待真机确认。
+- WebP 透明实测：Mac Chrome 155 可以；Mac Safari 27.0.1 不可以（`toBlob('image/webp')` 返回 `image/png`），所以 Safari 上透明图存 PNG。iPhone（iOS 27，2026-10-11 真机）：同样返回 `image/png`，透明图存 PNG。
 - 衣物记录字段见 `store.js` 的 `newItem()`；分类、季节、场景的取值只在 `options.js` 定义。改了取值要考虑已存数据。
 - `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v1，仓库 `items`）。改表结构必须升版本号并写迁移。
 - Service Worker 缓存名 `closet-vN`（`sw.js`）。改了任何应用文件，发布前把 N 加 1，否则用户手机上一直是旧版本。
