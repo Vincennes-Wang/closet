@@ -302,6 +302,14 @@ async function cachedUrls() {
 async function loadTracked(name, id, device, dtype, loader) {
   const key = `${name}|${device}|${dtype}`;
   if (loaded.has(key)) return loaded.get(key);
+  // 同一模型换了后端或 dtype：先释放旧的，避免手机内存里同时留着两份
+  for (const [k, obj] of loaded) {
+    if (k.startsWith(name + '|') && k !== key) {
+      try { await obj.dispose?.(); } catch (err) { recordError(`释放 ${k}`, err); }
+      loaded.delete(k);
+      log(`释放 ${k}`);
+    }
+  }
   const before = await cachedUrls();
   const files = new Map(); // file -> total bytes
   const progress_callback = (p) => {
@@ -759,14 +767,18 @@ async function clearCache() {
 function fillDtypes(sel, list, preferred) {
   sel.innerHTML = list.map((d) => `<option ${d === preferred ? 'selected' : ''}>${d}</option>`).join('');
 }
-function syncDtypes() {
-  const device = $('backend').value === 'wasm' || ($('backend').value === 'auto' && !state.env.webgpuAdapter) ? 'wasm' : 'webgpu';
+const currentDevice = () => $('backend').value === 'wasm' || ($('backend').value === 'auto' && !state.env.webgpuAdapter) ? 'wasm' : 'webgpu';
+// 切换抠图模型只重置抠图 dtype，不动 SigLIP 的 dtype
+function syncMattingDtype() {
   const m = MATTING_MODELS[$('matting').value];
-  if (m) fillDtypes($('mattingDtype'), m.dtypes, params.get('mattingDtype') ?? m[device]);
+  if (m) fillDtypes($('mattingDtype'), m.dtypes, params.get('mattingDtype') ?? m[currentDevice()]);
   else $('mattingDtype').innerHTML = '<option>–</option>';
-  fillDtypes($('visionDtype'), SIGLIP.dtypes, params.get('visionDtype') ?? SIGLIP[device]);
-  fillDtypes($('textDtype'), SIGLIP.dtypes, params.get('textDtype') ?? SIGLIP[device]);
   $('licenseNote').textContent = m?.note ?? '';
+}
+function syncDtypes() {
+  syncMattingDtype();
+  fillDtypes($('visionDtype'), SIGLIP.dtypes, params.get('visionDtype') ?? SIGLIP[currentDevice()]);
+  fillDtypes($('textDtype'), SIGLIP.dtypes, params.get('textDtype') ?? SIGLIP[currentDevice()]);
 }
 
 // 本地测试钩子：?samples=../private/samples/ 从本地 http.server 目录列表读取图片（线上该目录不存在）
@@ -791,7 +803,7 @@ for (const id of ['matting', 'backend', 'textSource']) if (params.get(id)) $(id)
 if (params.get('classify') === '0') $('doClassify').checked = false;
 $('files').addEventListener('change', (e) => { state.files = [...e.target.files]; $('fileCount').textContent = `${state.files.length} 张`; });
 $('importFiles').addEventListener('change', (e) => { handleImports([...e.target.files], 'file'); e.target.value = ''; });
-$('matting').addEventListener('change', syncDtypes);
+$('matting').addEventListener('change', syncMattingDtype);
 $('backend').addEventListener('change', syncDtypes);
 $('run').addEventListener('click', run);
 $('compare').addEventListener('click', compare);

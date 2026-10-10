@@ -1,7 +1,7 @@
 # PROGRESS
 - 状态：进行中
-- 当前阶段：阶段 0 — 模型可行性验证（收尾：RMBG 已在 iPhone 跑通；iPhone 加上分类后失败，定位中）
-- 累计用时：3
+- 当前阶段：阶段 0 — 模型可行性验证（收尾：iPhone 上 RMBG 单独可用、分类 q4f16 单独可用；两者同时用待测）
+- 累计用时：3.5
 - 线上地址：https://vincennes-wang.github.io/closet/spike/
 
 ## 最近一次工作（2026-10-10）
@@ -36,6 +36,13 @@
     - 分类：RMBG + 分类（SigLIP q4f16）一起跑时失败（用户反馈"一旦加入分类，就无法测试了"）。贴回的 JSON 与上一次完全相同（同一时间戳，`classify: false`），是剪贴板里的旧内容，这次运行没有留下数据，原因未确认。
     - 为此 spike 新增：每一步都把会话 JSON 存进 localStorage；页面崩溃后重开，出现「复制上次崩溃会话 JSON」按钮。JSON 增加 `sessionStartedAt` / `savedAt`，用来识别旧数据。Mac Chrome 上用 CDP `Page.crash` 模拟崩溃验证通过（崩溃在"处理 4/20"，重开后能看到该步骤和崩溃前已加载的模型）。
     - 系统抠图导入 / 粘贴：未测。用户找不到粘贴入口，也不想测这部分；RMBG 已能用，系统抠图只作保底，**不再测**。
+  - **iPhone 第二次实测（iOS 27，崩溃会话 JSON）**：
+    - 现象：页面自动刷新（iOS 杀掉了标签页进程）。
+    - RMBG fp16 + SigLIP fp16（默认 dtype）：在"加载 siglip-vision（webgpu, fp16）"时崩溃。
+    - 只分类，SigLIP q4f16：✅ 首张 634 ms，品类"背心 99%"正确。下载 53.7 MB。
+    - "RMBG + q4f16"那次实际用的是 fp16：切换抠图模型时页面把 SigLIP dtype 重置成默认 fp16（页面 bug），旧的 q4f16 也没释放。崩溃时内存里有 q4f16 + RMBG fp16 + SigLIP fp16，约 330 MB 权重，崩在处理第 1 张时。
+    - 已修：切换抠图模型不再改 SigLIP dtype；同一模型换 dtype 或后端时先释放旧的。Mac Chrome 按用户操作顺序复现验证通过（dtype 保持 q4f16；改 fp16 时日志出现"释放 siglip-vision|webgpu|q4f16"）。
+    - 判断：iPhone 上的崩溃与同时驻留的模型总量有关（88 MB 单独可以，54 MB 单独可以，88+186 MB 不行）。具体内存上限未测。
   - **第一轮**结果见下表。
 - 验证结果（第一轮，Mac Chrome 155，Apple M5，20 张样本，长边缩到 1024 px）：
 
@@ -58,8 +65,8 @@
   - Safari：未测（safaridriver 未开启）。iPhone：第一轮一次都没跑通（用户反馈，无 JSON）；第二轮 RMBG 跑通，见上。
 
 ## 下次从这里继续
-1. 看 iPhone 回传的数据：先跑"只分类、不抠图"（q4f16），再跑"RMBG + 分类"；崩溃时复制"上次崩溃会话 JSON"。据此判断是 SigLIP 本身在 iPhone 上跑不了，还是两个模型同时加载超出内存。
-2. 分类跑通 → 阶段 0 结束，按 `03_经验日志.md` 写复盘，进入阶段 1。
+1. iPhone 测 RMBG fp16 + SigLIP q4f16（共约 142 MB）在新打开的页面里能否一起跑。
+2. 能跑 → 阶段 0 结束，按 `03_经验日志.md` 写复盘，进入阶段 1。不能跑 → 正式应用里先抠图、释放 RMBG，再加载 SigLIP 分类（串行），或者 RMBG 改用 WASM quantized（44 MB）。
 3. 用 20 张样本人工标注品类 / 袖长 / 厚度，算 fashionSigLIP 准确率（袖长只对上装计分）。
 
 ## 未解决问题
@@ -67,5 +74,5 @@
 - ~~同一页面内 BiRefNet 从 WebGPU 回退到 WASM 后仍报 WebGPU 错误~~ — **已放弃**（2026-10-10）：BiRefNet_lite 不再使用，不排查。
 - iPhone 第一轮失败原因未确认（没有 JSON）。第一轮页面默认加载 BiRefNet + SigLIP fp16（共约 520 MB），第二轮默认什么都不加载；要确认是不是这个原因，可以在 iPhone 上用第一轮的组合再跑一次，但现在已不需要。
 - 系统抠图导入 / 粘贴没有在 iPhone 上验证（用户决定不测）。如果以后要靠系统抠图保底，需要重新验证。
-- iPhone 上 RMBG + SigLIP 分类失败，原因未确认。确认方法：在 iPhone 上单独跑分类（不抠图），失败时复制崩溃会话 JSON。
+- iPhone 上 RMBG + SigLIP q4f16 同时运行还没测到（上次实际是 fp16，见上）。
 - 厚度在 q4f16 下和 fp32 有 4/20 不一致，阶段 1 前要用人工标注确认哪个更准。
