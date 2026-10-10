@@ -57,6 +57,12 @@
 - 页面"关于"区域注明使用了 RMBG-1.4 及其许可。
 - 分类在浏览器内运行：Transformers.js + WebGPU，WASM 兜底。手机端只加载 fashionSigLIP 图像模型；标签文字向量在 Mac 上预先算好，存为 `spike/label-embeddings.json`（不是个人数据，可以提交）。
 
+### 阶段 0 结论（2026-10-11）
+- iPhone 上 RMBG-1.4 的内存在整个页面生命周期内累积。终止 Worker 不能释放这部分内存。
+- 阶段 5 接入 AI 抠图：每批 3 张，结果存 IndexedDB，然后自动刷新页面续传下一批。验收标准：连续 3 批共 9 张不崩溃。
+- iOS 系统抠图（透明 PNG）始终作为批量录入和兜底方案。
+- 分类模型：fashionSigLIP q4f16，只加载图像模型，在 Worker 中运行（阶段 5 接入）。
+
 ## 已核实的模型（2026-10-10，查 Hugging Face API）
 | 用途 | 仓库 | 许可证 | 备注 |
 |---|---|---|---|
