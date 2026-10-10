@@ -1,6 +1,6 @@
 # PROGRESS
 - 状态：进行中
-- 当前阶段：阶段 0 — 模型可行性验证（收尾：RMBG 已在 iPhone 跑通；iPhone 分类待测）
+- 当前阶段：阶段 0 — 模型可行性验证（收尾：RMBG 已在 iPhone 跑通；iPhone 加上分类后失败，定位中）
 - 累计用时：3
 - 线上地址：https://vincennes-wang.github.io/closet/spike/
 
@@ -29,11 +29,12 @@
     - 图像 dtype 对 top-1 的影响（都用预计算向量，以 fp32 图像为基准）：fp16 三组都是 20/20；q4f16 为品类 20、袖长 19、厚度 16；int8 为品类 18、袖长 19、厚度 18。手机端建议先用 q4f16（54 MB，品类一致）；厚度要稳定的话再试 fp16（186 MB）。
     - 导入测试：20 张透明 PNG 全部识别为"已抠图"（透明 31–73%）；3 张原图 JPG 全部提示"未抠图"；模拟粘贴（页面内构造 `ClipboardEvent`）收到 PNG，透明占比 50%，与构造的图一致。真实 iOS 粘贴只能真机测。
     - 手机模式（预计算 + 图像 q4f16）总下载：53.7 MB 模型 + 145 KB 向量；不加载 tokenizer 和文本模型。单图分类 26 ms（Mac WebGPU）。
-  - **iPhone 实测（2026-10-10，用户反馈为 iOS 26）**：
-    - UA：`iPhone OS 18_7 ... Version/27.0 Mobile Safari`。Safari 版本号是 27.0；"18_7"不能当系统版本看（据我所知，Safari 从 26 起把 UA 里的系统版本固定在 18_x，未在本项目内核实）。实际系统版本以"设置 → 通用 → 关于本机"为准。
+  - **iPhone 实测（2026-10-10，iOS 27，用户在"关于本机"确认）**：
+    - UA：`iPhone OS 18_7 ... Version/27.0 Mobile Safari`。实际系统是 iOS 27：UA 里的"18_7"不是真实系统版本，Safari 版本号 27.0 与系统一致。以后从 JSON 判断系统版本时看 `Version/xx`。
     - RMBG-1.4 WebGPU fp16：✅ 1 张成功，抠图 1638 ms（首张，含着色器编译），缓存加载 1147 ms，无错误。
     - WebGPU：可用，shader-f16 支持，storage buffer 上限 **44**（Mac Chrome 只有 10）。
-    - 分类：这次没开（`classify: false`），iPhone 上的 SigLIP 未测。
+    - 分类：RMBG + 分类（SigLIP q4f16）一起跑时失败（用户反馈"一旦加入分类，就无法测试了"）。贴回的 JSON 与上一次完全相同（同一时间戳，`classify: false`），是剪贴板里的旧内容，这次运行没有留下数据，原因未确认。
+    - 为此 spike 新增：每一步都把会话 JSON 存进 localStorage；页面崩溃后重开，出现「复制上次崩溃会话 JSON」按钮。JSON 增加 `sessionStartedAt` / `savedAt`，用来识别旧数据。Mac Chrome 上用 CDP `Page.crash` 模拟崩溃验证通过（崩溃在"处理 4/20"，重开后能看到该步骤和崩溃前已加载的模型）。
     - 系统抠图导入 / 粘贴：未测。用户找不到粘贴入口，也不想测这部分；RMBG 已能用，系统抠图只作保底，**不再测**。
   - **第一轮**结果见下表。
 - 验证结果（第一轮，Mac Chrome 155，Apple M5，20 张样本，长边缩到 1024 px）：
@@ -57,7 +58,7 @@
   - Safari：未测（safaridriver 未开启）。iPhone：第一轮一次都没跑通（用户反馈，无 JSON）；第二轮 RMBG 跑通，见上。
 
 ## 下次从这里继续
-1. iPhone 上测分类：「C」区选 3–5 张照片，抠图选 RMBG-1.4，勾选"运行分类"，SigLIP 图像 dtype 选 q4f16，贴回 JSON。
+1. 看 iPhone 回传的数据：先跑"只分类、不抠图"（q4f16），再跑"RMBG + 分类"；崩溃时复制"上次崩溃会话 JSON"。据此判断是 SigLIP 本身在 iPhone 上跑不了，还是两个模型同时加载超出内存。
 2. 分类跑通 → 阶段 0 结束，按 `03_经验日志.md` 写复盘，进入阶段 1。
 3. 用 20 张样本人工标注品类 / 袖长 / 厚度，算 fashionSigLIP 准确率（袖长只对上装计分）。
 
@@ -66,4 +67,5 @@
 - ~~同一页面内 BiRefNet 从 WebGPU 回退到 WASM 后仍报 WebGPU 错误~~ — **已放弃**（2026-10-10）：BiRefNet_lite 不再使用，不排查。
 - iPhone 第一轮失败原因未确认（没有 JSON）。第一轮页面默认加载 BiRefNet + SigLIP fp16（共约 520 MB），第二轮默认什么都不加载；要确认是不是这个原因，可以在 iPhone 上用第一轮的组合再跑一次，但现在已不需要。
 - 系统抠图导入 / 粘贴没有在 iPhone 上验证（用户决定不测）。如果以后要靠系统抠图保底，需要重新验证。
+- iPhone 上 RMBG + SigLIP 分类失败，原因未确认。确认方法：在 iPhone 上单独跑分类（不抠图），失败时复制崩溃会话 JSON。
 - 厚度在 q4f16 下和 fp32 有 4/20 不一致，阶段 1 前要用人工标注确认哪个更准。

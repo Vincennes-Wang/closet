@@ -77,6 +77,7 @@
 </fieldset>
 
 <button class="primary" id="copy">复制结果 JSON</button>
+<button id="copyCrash" hidden>复制上次崩溃会话 JSON</button>
 <button id="clearCache">清除模型缓存</button>
 
 <h2>指标</h2>
@@ -110,6 +111,9 @@ const CACHE_NAME = 'transformers-cache';
 const MAX_SIDE = 1024; // 先缩图，避免 iPhone 原图占满内存
 const EMBEDDINGS_URL = 'label-embeddings.json';
 const STEP_KEY = 'spike-last-step'; // 记录最后一步，页面崩溃后重开能看到停在哪
+const SESSION_STARTED = new Date().toISOString();
+const SESSION_KEY = 'spike-session'; // 每一步都保存当前会话 JSON
+const CRASH_KEY = 'spike-crash-session'; // 上次没正常结束的会话 JSON，崩溃后可复制
 
 // ---------- 模型配置（ID 已于 2026-10-10 在 Hugging Face 核实） ----------
 const MATTING_MODELS = {
@@ -182,7 +186,10 @@ function log(msg) {
   $('status').textContent += line + '\n';
   $('status').scrollTop = 1e9;
   console.log(line);
-  try { localStorage.setItem(STEP_KEY, line); } catch { /* 隐私模式 */ }
+  try {
+    localStorage.setItem(STEP_KEY, line);
+    localStorage.setItem(SESSION_KEY, resultJson());
+  } catch { /* 隐私模式或空间不足 */ }
 }
 function markIdle() {
   try { localStorage.setItem(STEP_KEY, '空闲'); } catch { /* 隐私模式 */ }
@@ -209,6 +216,9 @@ async function detectEnv() {
     const prev = localStorage.getItem(STEP_KEY);
     // 上次没回到"空闲"，说明页面在处理中被关闭或崩溃
     e.previousSessionLastStep = prev && prev !== '空闲' ? prev : null;
+    // 上次没正常结束：把它的会话 JSON 留到下次崩溃前，供复制
+    if (e.previousSessionLastStep) localStorage.setItem(CRASH_KEY, localStorage.getItem(SESSION_KEY) ?? '{}');
+    $('copyCrash').hidden = !localStorage.getItem(CRASH_KEY);
   } catch { e.previousSessionLastStep = null; }
   e.userAgent = navigator.userAgent;
   e.transformersJs = TJS_VERSION;
@@ -615,6 +625,7 @@ async function run() {
         }
         card.innerHTML = `<div><b>${file.name}</b>${head}</div><div class="imgs">${imgsHtml}</div>`;
         if (clf) {
+          log(`分类 ${idx + 1}/${state.files.length} ${file.name}`);
           const t0 = performance.now();
           const img = await imageEmbedding(clf, target);
           rec.classes = score(img, clf.embeds);
@@ -725,17 +736,17 @@ async function generateEmbeddings() {
 }
 
 function resultJson() {
-  return JSON.stringify({ env: state.env, loads: state.loads, imports: state.imports, runs: state.runs.filter((r) => !r.perGroup), consistency: state.consistency, errors: state.errors }, null, 2);
+  return JSON.stringify({ sessionStartedAt: SESSION_STARTED, savedAt: new Date().toISOString(), env: state.env, loads: state.loads, imports: state.imports, runs: state.runs.filter((r) => !r.perGroup), consistency: state.consistency, errors: state.errors }, null, 2);
 }
 
-async function copyJson() {
-  const text = resultJson();
-  try { await navigator.clipboard.writeText(text); log('已复制结果 JSON'); }
+async function copyText(text, label) {
+  try { await navigator.clipboard.writeText(text); log(`已复制${label} JSON`); }
   catch (err) {
     const ta = $('jsonOut'); ta.hidden = false; ta.value = text; ta.select();
     log('剪贴板不可用，请手动复制下方文本框');
   }
 }
+const copyJson = () => copyText(resultJson(), '结果');
 
 async function clearCache() {
   await caches.delete(CACHE_NAME);
@@ -785,6 +796,7 @@ $('backend').addEventListener('change', syncDtypes);
 $('run').addEventListener('click', run);
 $('compare').addEventListener('click', compare);
 $('copy').addEventListener('click', copyJson);
+$('copyCrash').addEventListener('click', () => copyText(localStorage.getItem(CRASH_KEY) ?? '{}', '上次崩溃会话'));
 $('clearCache').addEventListener('click', clearCache);
 env.allowLocalModels = false; // 只从 Hugging Face 加载，避免向本站请求 /models/
 
