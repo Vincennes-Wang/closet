@@ -26,3 +26,7 @@ private/
 # 例外：spike 页面需要的图标
 !spike/icons/
 !spike/icons/**
+
+# 例外：应用图标
+!icons/
+!icons/**

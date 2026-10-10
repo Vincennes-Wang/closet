@@ -1,0 +1,46 @@
+:root {
+  --bg: #f6f3ee; --card: #fff; --ink: #2b2620; --muted: #8a8177; --line: #e4ddd3;
+  --accent: #3d5a4a; --danger: #a33a2c;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  color: var(--ink); background: var(--bg);
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: env(safe-area-inset-top) 16px calc(24px + env(safe-area-inset-bottom)); max-width: 720px; margin-inline: auto; }
+header { padding: 16px 0 8px; }
+h1 { margin: 0; font-size: 28px; }
+h2 { font-size: 16px; margin: 20px 0 8px; }
+.muted { color: var(--muted); font-size: 13px; }
+.error { color: var(--danger); font-size: 14px; min-height: 0; margin: 4px 0; }
+.error:empty { display: none; }
+.hint { background: #fff6dd; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+
+button, .primary { font: inherit; font-size: 15px; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 10px; padding: 8px 14px; cursor: pointer; }
+.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.danger { color: var(--danger); border-color: var(--danger); }
+label.primary { display: block; text-align: center; padding: 14px; font-size: 17px; margin: 8px 0 16px; }
+
+.card { background: var(--card); border-radius: 14px; padding: 12px; margin-bottom: 12px; box-shadow: 0 1px 2px rgb(0 0 0 / 6%); }
+/* 透明图配棋盘格背景，一眼看出是否已抠图 */
+.alpha { background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0 / 16px 16px; }
+.thumb { display: block; max-width: 100%; max-height: 260px; margin: 0 auto 8px; border-radius: 8px; }
+
+.fields { display: grid; gap: 10px; }
+.field { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.field input { font: inherit; font-size: 16px; color: var(--ink); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 6px 12px; border-radius: 999px; font-size: 14px; }
+.chip[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
+.tile { display: grid; gap: 4px; padding: 6px; border-radius: 12px; font-size: 13px; text-align: center; }
+.tile img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 8px; }
+.tile span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.toggle { display: block; margin: 24px 0 8px; font-size: 14px; color: var(--muted); }
+#archived .tile { opacity: .6; }
+details { margin-top: 24px; font-size: 14px; }
+summary { cursor: pointer; color: var(--muted); }
+
+dialog { border: none; border-radius: 16px; padding: 16px; width: min(560px, 94vw); max-height: 90vh; }
+dialog::backdrop { background: rgb(0 0 0 / 35%); }
