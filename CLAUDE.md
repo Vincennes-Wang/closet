@@ -55,10 +55,10 @@
 ## 已核实的模型（2026-10-10，查 Hugging Face API）
 | 用途 | 仓库 | 许可证 | 备注 |
 |---|---|---|---|
-| 运行库 | `@huggingface/transformers@4.3.1`（jsDelivr） | Apache-2.0 | 浏览器缓存默认开启（Cache API `transformers-cache`） |
-| 抠图（主选） | `onnx-community/BiRefNet_lite-ONNX` | MIT | fp16 114.5 MB / fp32 224 MB。模型卡示例里的 `onnx-community/BiRefNet_lite` 不存在 |
-| 抠图（对照） | `Xenova/modnet` | Apache-2.0 | fp16 13 MB / uint8 6.6 MB。人像抠图模型 |
-| 抠图（仅对照） | `briaai/RMBG-1.4` | Bria 非商用 | 不得用于正式应用 |
+| 运行库 | `@huggingface/transformers@4.3.1`（jsDelivr `dist/transformers.min.js`） | Apache-2.0 | 浏览器缓存默认开启（Cache API `transformers-cache`）。不要用 `transformers.web.min.js`：它含裸模块名 `onnxruntime-web/webgpu`，浏览器无法解析 |
+| 抠图（主选） | `onnx-community/BiRefNet_lite-ONNX` | MIT | fp16 114.5 MB / fp32 224 MB。模型卡示例里的 `onnx-community/BiRefNet_lite` 不存在。**Mac Chrome 上跑不通**：WebGPU 超出 storage buffer 上限（需 11，上限 10），WASM 内存不足；输入固定 1024² |
+| 抠图（对照） | `Xenova/modnet` | Apache-2.0 | fp16 13 MB / uint8 6.6 MB。人像抠图模型，衣物平铺图大量破洞，不可用 |
+| 抠图（仅对照） | `briaai/RMBG-1.4` | Bria 非商用 | 效果最好，但不得用于正式应用 |
 | 分类 | `Marqo/marqo-fashionSigLIP` | Apache-2.0 | `SiglipTextModel` + `SiglipVisionModel`；vision fp16 186 MB，text fp16 221 MB |
 
 ## 目录

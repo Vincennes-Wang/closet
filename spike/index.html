@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阶段 0：模型验证</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>👕</text></svg>">
+<style>
+  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 12px; color: #222; background: #fafafa; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  h2 { font-size: 15px; margin: 16px 0 6px; }
+  fieldset { border: 1px solid #ddd; border-radius: 8px; margin: 0 0 10px; padding: 8px 10px; background: #fff; }
+  legend { font-weight: 600; }
+  label { display: inline-block; margin: 2px 12px 2px 0; }
+  button { font: inherit; padding: 6px 12px; margin: 4px 6px 4px 0; border-radius: 6px; border: 1px solid #888; background: #fff; }
+  button.primary { background: #222; color: #fff; border-color: #222; }
+  button:disabled { opacity: .5; }
+  table { border-collapse: collapse; background: #fff; font-size: 13px; }
+  th, td { border: 1px solid #ddd; padding: 3px 6px; text-align: left; vertical-align: top; }
+  .note { color: #a40; font-size: 12px; }
+  #status { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; background: #fff; border: 1px solid #ddd; padding: 6px; max-height: 120px; overflow: auto; }
+  #errors li { color: #b00; font-family: ui-monospace, monospace; font-size: 12px; }
+  .card { display: inline-block; vertical-align: top; width: 330px; margin: 0 8px 8px 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 6px; }
+  .imgs { display: flex; gap: 4px; }
+  .imgs > div { flex: 1; aspect-ratio: 3/4; display: flex; align-items: center; justify-content: center; border: 1px solid #eee; }
+  .imgs img { max-width: 100%; max-height: 100%; }
+  .white { background: #fff; }
+  .checker { background: repeating-conic-gradient(#ccc 0% 25%, #fff 0% 50%) 0 0 / 16px 16px; }
+  .card table { width: 100%; margin-top: 4px; }
+  textarea { width: 100%; height: 200px; font-family: ui-monospace, monospace; font-size: 11px; }
+</style>
+</head>
+<body>
+<h1>阶段 0：浏览器内模型验证</h1>
+<p class="note">照片只在本机浏览器内处理，不上传。模型从 Hugging Face 下载一次后存入浏览器缓存。</p>
+
+<fieldset>
+  <legend>1. 选择照片</legend>
+  <input type="file" id="files" multiple accept="image/*">
+  <span id="fileCount"></span>
+</fieldset>
+
+<fieldset>
+  <legend>2. 模型与后端</legend>
+  <label>后端
+    <select id="backend">
+      <option value="auto">自动（WebGPU 优先）</option>
+      <option value="webgpu">强制 WebGPU</option>
+      <option value="wasm">强制 WASM</option>
+    </select>
+  </label>
+  <label>抠图模型 <select id="matting"></select></label>
+  <label>抠图 dtype <select id="mattingDtype"></select></label>
+  <br>
+  <label>SigLIP 图像 dtype <select id="visionDtype"></select></label>
+  <label>SigLIP 文本 dtype <select id="textDtype"></select></label>
+  <label><input type="checkbox" id="doClassify" checked> 运行分类</label>
+  <div class="note" id="licenseNote"></div>
+  <button class="primary" id="run">运行</button>
+  <button id="copy">复制结果 JSON</button>
+  <button id="clearCache">清除模型缓存</button>
+</fieldset>
+
+<h2>指标</h2>
+<table id="env"></table>
+<h2>模型加载</h2>
+<table id="loads"><thead><tr><th>模型</th><th>后端</th><th>dtype</th><th>下载体积</th><th>来源</th><th>加载耗时</th><th>状态</th></tr></thead><tbody></tbody></table>
+<h2>运行日志</h2>
+<div id="status"></div>
+<h2>错误</h2>
+<ul id="errors"><li style="color:#080">无</li></ul>
+<textarea id="jsonOut" hidden readonly></textarea>
+<h2>结果</h2>
+<div id="results"></div>
+
+<script type="module">
+import {
+  env, AutoModel, AutoProcessor, AutoTokenizer, SiglipTextModel, SiglipVisionModel, RawImage, softmax,
+} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
+
+const TJS_VERSION = '4.3.1';
+const CACHE_NAME = 'transformers-cache';
+const MAX_SIDE = 1024; // 先缩图，避免 iPhone 原图占满内存
+
+// ---------- 模型配置（ID 已于 2026-10-10 在 Hugging Face 核实） ----------
+const MATTING_MODELS = {
+  birefnet: {
+    label: 'BiRefNet_lite（主选，MIT）', id: 'onnx-community/BiRefNet_lite-ONNX',
+    dtypes: ['fp16', 'fp32'], webgpu: 'fp16', wasm: 'fp32',
+    input: 'input_image', output: 'output_image', sigmoid: true,
+  },
+  modnet: {
+    label: 'MODNet（对照，Apache-2.0）', id: 'Xenova/modnet',
+    dtypes: ['fp16', 'fp32', 'uint8', 'q4f16'], webgpu: 'fp16', wasm: 'uint8',
+    input: 'input', output: 'output', sigmoid: false,
+  },
+  rmbg: {
+    label: 'RMBG-1.4（仅对照·非商用）', id: 'briaai/RMBG-1.4',
+    dtypes: ['fp16', 'fp32', 'quantized'], webgpu: 'fp16', wasm: 'quantized',
+    input: 'input', output: 'output', sigmoid: false, config: { model_type: 'custom' },
+    note: 'RMBG-1.4 为 Bria 非商用许可证，只用于对照，不能进入正式应用。',
+  },
+};
+const SIGLIP = {
+  id: 'Marqo/marqo-fashionSigLIP',
+  dtypes: ['fp16', 'q4f16', 'int8', 'fp32'], webgpu: 'fp16', wasm: 'int8',
+};
+
+// ---------- 分类标签：中文标签与英文 prompt 分开，方便调整 ----------
+const GROUPS = {
+  category: { zh: '品类', labels: [
+    { zh: 'T恤', en: 'a t-shirt' },
+    { zh: '衬衫', en: 'a button-up shirt' },
+    { zh: 'Polo衫', en: 'a polo shirt' },
+    { zh: '背心', en: 'a tank top' },
+    { zh: '针织衫', en: 'a knit sweater' },
+    { zh: '外套', en: 'a jacket or coat' },
+    { zh: '裤子', en: 'a pair of pants' },
+    { zh: '半身裙', en: 'a skirt' },
+    { zh: '连衣裙', en: 'a dress' },
+    { zh: '套装', en: 'a matching two-piece outfit set' },
+    { zh: '鞋靴', en: 'a pair of shoes or boots' },
+    { zh: '箱包', en: 'a bag' },
+    { zh: '配饰', en: 'a fashion accessory such as a scarf, belt or jewelry' },
+    { zh: '帽子', en: 'a hat' },
+  ]},
+  sleeve: { zh: '袖长', labels: [
+    { zh: '无袖', en: 'a sleeveless garment' },
+    { zh: '短袖', en: 'a short-sleeve garment' },
+    { zh: '长袖', en: 'a long-sleeve garment' },
+  ]},
+  thickness: { zh: '厚度', labels: [
+    { zh: '薄', en: 'thin lightweight summer clothing' },
+    { zh: '中', en: 'medium-weight clothing for spring or autumn' },
+    { zh: '厚', en: 'thick warm winter clothing' },
+  ]},
+};
+
+// ---------- 状态 ----------
+const $ = (id) => document.getElementById(id);
+const state = {
+  env: {}, loads: [], runs: [], errors: [],
+  files: [],
+};
+window.__spike = state; // 供本地自动化测试读取
+const loaded = new Map(); // key -> 已加载对象
+
+function log(msg) {
+  const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  $('status').textContent += line + '\n';
+  $('status').scrollTop = 1e9;
+  console.log(line);
+}
+function recordError(where, err) {
+  const msg = `${where}: ${err?.message ?? err}`;
+  state.errors.push({ where, message: String(err?.message ?? err), time: new Date().toISOString() });
+  const ul = $('errors');
+  if (state.errors.length === 1) ul.innerHTML = '';
+  const li = document.createElement('li'); li.textContent = msg; ul.appendChild(li);
+  log('错误 ' + msg);
+}
+window.addEventListener('error', (e) => recordError('window.onerror', e.error ?? e.message));
+window.addEventListener('unhandledrejection', (e) => recordError('unhandledrejection', e.reason));
+
+const fmtMB = (b) => b == null ? '–' : (b / 1e6).toFixed(1) + ' MB';
+const fmtMs = (ms) => ms == null ? '–' : Math.round(ms) + ' ms';
+
+// ---------- 环境检测 ----------
+async function detectEnv() {
+  const e = state.env;
+  e.userAgent = navigator.userAgent;
+  e.transformersJs = TJS_VERSION;
+  e.hardwareConcurrency = navigator.hardwareConcurrency;
+  e.deviceMemory = navigator.deviceMemory ?? null;
+  e.crossOriginIsolated = self.crossOriginIsolated;
+  e.webgpuApi = 'gpu' in navigator;
+  e.webgpuAdapter = false;
+  try {
+    const adapter = await navigator.gpu?.requestAdapter();
+    if (adapter) {
+      e.webgpuAdapter = true;
+      const info = adapter.info ?? {};
+      e.webgpuInfo = [info.vendor, info.architecture, info.description].filter(Boolean).join(' / ') || '未知';
+      e.webgpuShaderF16 = adapter.features.has('shader-f16');
+    }
+  } catch (err) { recordError('requestAdapter', err); }
+  try { e.persistentStorage = await navigator.storage?.persist?.() ?? null; } catch { e.persistentStorage = null; }
+  await refreshStorage();
+  renderEnv();
+}
+async function refreshStorage() {
+  try {
+    const est = await navigator.storage?.estimate?.();
+    if (est) { state.env.storageUsage = est.usage; state.env.storageQuota = est.quota; }
+  } catch { /* 无 */ }
+}
+function renderEnv() {
+  const e = state.env;
+  const rows = [
+    ['Transformers.js', e.transformersJs],
+    ['WebGPU API', e.webgpuApi ? '有' : '无'],
+    ['WebGPU 适配器', e.webgpuAdapter ? `可用（${e.webgpuInfo}；shader-f16：${e.webgpuShaderF16 ? '支持' : '不支持'}）` : '不可用'],
+    ['最近一次实际后端', e.lastBackend ?? '–'],
+    ['CPU 线程 / 内存', `${e.hardwareConcurrency} / ${e.deviceMemory ?? '?'} GB`],
+    ['持久化存储', String(e.persistentStorage)],
+    ['已用存储 / 配额', `${fmtMB(e.storageUsage)} / ${fmtMB(e.storageQuota)}`],
+    ['User-Agent', e.userAgent],
+  ];
+  $('env').innerHTML = rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('');
+}
+
+// ---------- 模型加载 ----------
+async function cachedUrls() {
+  try { return new Set((await (await caches.open(CACHE_NAME)).keys()).map((r) => r.url)); }
+  catch { return new Set(); }
+}
+
+// 加载一个模型组件并记录下载体积、是否来自缓存、耗时
+async function loadTracked(name, id, device, dtype, loader) {
+  const key = `${name}|${device}|${dtype}`;
+  if (loaded.has(key)) return loaded.get(key);
+  const before = await cachedUrls();
+  const files = new Map(); // file -> total bytes
+  const progress_callback = (p) => {
+    if (p.file && p.total) files.set(p.file, p.total);
+    if (p.status === 'progress' && p.file?.endsWith('.onnx')) $('loadProgress') && ($('loadProgress').textContent = `${p.file} ${Math.round(p.progress)}%`);
+  };
+  const rec = { model: name, id, device, dtype, bytes: null, downloadedBytes: null, fromCache: null, loadMs: null, ok: false, error: null };
+  state.loads.push(rec);
+  log(`加载 ${name}（${device}, ${dtype}）…`);
+  renderLoads();
+  const t0 = performance.now();
+  try {
+    const obj = await loader(progress_callback);
+    rec.loadMs = performance.now() - t0;
+    rec.ok = true;
+    let total = 0, downloaded = 0;
+    for (const [file, size] of files) {
+      total += size;
+      const wasCached = [...before].some((u) => u.includes(id) && u.endsWith('/' + file));
+      if (!wasCached) downloaded += size;
+    }
+    rec.bytes = total; rec.downloadedBytes = downloaded; rec.fromCache = downloaded === 0;
+    loaded.set(key, obj);
+    log(`完成 ${name}：${fmtMB(total)}，${rec.fromCache ? '缓存' : '下载 ' + fmtMB(downloaded)}，${fmtMs(rec.loadMs)}`);
+    return obj;
+  } catch (err) {
+    rec.loadMs = performance.now() - t0;
+    rec.error = String(err?.message ?? err);
+    recordError(`加载 ${name} (${device}, ${dtype})`, err);
+    throw err;
+  } finally {
+    renderLoads();
+    await refreshStorage(); renderEnv();
+  }
+}
+function renderLoads() {
+  $('loads').querySelector('tbody').innerHTML = state.loads.map((r) => `<tr>
+    <td>${r.model}</td><td>${r.device}</td><td>${r.dtype}</td><td>${fmtMB(r.bytes)}</td>
+    <td>${r.fromCache == null ? '–' : r.fromCache ? '缓存' : '下载 ' + fmtMB(r.downloadedBytes)}</td>
+    <td>${fmtMs(r.loadMs)}</td><td>${r.ok ? '✅' : r.error ? '❌ ' + r.error.slice(0, 80) : '<span id="loadProgress">加载中…</span>'}</td></tr>`).join('');
+}
+
+async function loadMatting(key, device, dtype) {
+  const m = MATTING_MODELS[key];
+  const model = await loadTracked(`${key}`, m.id, device, dtype, (progress_callback) =>
+    AutoModel.from_pretrained(m.id, { device, dtype, progress_callback, ...(m.config ? { config: m.config } : {}) }));
+  const processor = await loadTracked(`${key}-processor`, m.id, 'cpu', '-', (progress_callback) =>
+    AutoProcessor.from_pretrained(m.id, { progress_callback }));
+  return { model, processor, spec: m };
+}
+
+async function loadSiglip(device, visionDtype, textDtype) {
+  const id = SIGLIP.id;
+  const vision = await loadTracked('siglip-vision', id, device, visionDtype, (progress_callback) =>
+    SiglipVisionModel.from_pretrained(id, { device, dtype: visionDtype, progress_callback }));
+  const processor = await loadTracked('siglip-processor', id, 'cpu', '-', (progress_callback) =>
+    AutoProcessor.from_pretrained(id, { progress_callback }));
+  const textKey = `siglip-text-embeds|${device}|${textDtype}`;
+  if (!loaded.has(textKey)) {
+    const tokenizer = await loadTracked('siglip-tokenizer', id, 'cpu', '-', (progress_callback) =>
+      AutoTokenizer.from_pretrained(id, { progress_callback }));
+    const text = await loadTracked('siglip-text', id, device, textDtype, (progress_callback) =>
+      SiglipTextModel.from_pretrained(id, { device, dtype: textDtype, progress_callback }));
+    // 文本 embedding 只算一次
+    const t0 = performance.now();
+    const embeds = {};
+    for (const [g, def] of Object.entries(GROUPS)) {
+      const inputs = tokenizer(def.labels.map((l) => l.en), { padding: 'max_length', truncation: true });
+      const { text_embeds } = await text(inputs);
+      embeds[g] = text_embeds.normalize().tolist();
+    }
+    state.env.textEmbedMs = performance.now() - t0;
+    log(`文本 embedding 完成：${fmtMs(state.env.textEmbedMs)}`);
+    loaded.set(textKey, embeds);
+  }
+  return { vision, processor, embeds: loaded.get(textKey) };
+}
+
+// ---------- 图片处理 ----------
+async function fileToCanvas(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const scale = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  return c;
+}
+
+async function runMatting(m, srcCanvas) {
+  const image = RawImage.fromCanvas(srcCanvas).rgb();
+  const t0 = performance.now();
+  const { pixel_values } = await m.processor(image);
+  const out = await m.model({ [m.spec.input]: pixel_values });
+  let t = (out[m.spec.output] ?? Object.values(out)[0])[0];
+  if (m.spec.sigmoid) t = t.sigmoid();
+  const mask = await RawImage.fromTensor(t.mul(255).to('uint8')).resize(image.width, image.height);
+  const ms = performance.now() - t0;
+  // 合成透明图：RGB 来自原图，alpha 来自遮罩
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const src = srcCanvas.getContext('2d').getImageData(0, 0, w, h);
+  const ch = mask.channels;
+  for (let i = 0; i < w * h; i++) src.data[i * 4 + 3] = mask.data[i * ch];
+  const cut = document.createElement('canvas'); cut.width = w; cut.height = h;
+  cut.getContext('2d').putImageData(src, 0, 0);
+  const white = document.createElement('canvas'); white.width = w; white.height = h;
+  const wctx = white.getContext('2d');
+  wctx.fillStyle = '#fff'; wctx.fillRect(0, 0, w, h); wctx.drawImage(cut, 0, 0);
+  // 前景占比，用来发现"全透明/全不透明"这类明显失败
+  let sum = 0; for (let i = 0; i < w * h; i++) sum += mask.data[i * ch];
+  return { ms, cut, white, foregroundRatio: +(sum / (255 * w * h)).toFixed(3) };
+}
+
+async function runClassify(s, canvas) {
+  const image = RawImage.fromCanvas(canvas).rgb();
+  const t0 = performance.now();
+  const inputs = await s.processor(image);
+  const { image_embeds } = await s.vision(inputs);
+  const img = image_embeds.normalize().tolist()[0];
+  const result = {};
+  for (const [g, def] of Object.entries(GROUPS)) {
+    // 打分沿用 Marqo 模型卡：softmax(100 × 余弦相似度)
+    const logits = s.embeds[g].map((t) => 100 * t.reduce((acc, v, i) => acc + v * img[i], 0));
+    const probs = softmax(logits);
+    result[g] = def.labels.map((l, i) => ({ zh: l.zh, en: l.en, score: +probs[i].toFixed(4) }))
+      .sort((a, b) => b.score - a.score).slice(0, 3);
+  }
+  return { ms: performance.now() - t0, result };
+}
+
+// ---------- 主流程 ----------
+async function pickDevice() {
+  const choice = $('backend').value;
+  if (choice === 'wasm') return 'wasm';
+  if (choice === 'webgpu') return 'webgpu';
+  return state.env.webgpuAdapter ? 'webgpu' : 'wasm';
+}
+
+// WebGPU 加载失败时自动回退 WASM（后端为"自动"时）
+async function withFallback(device, fn) {
+  try { return { device, value: await fn(device) }; }
+  catch (err) {
+    if (device === 'webgpu' && $('backend').value === 'auto') {
+      log('WebGPU 失败，回退 WASM');
+      return { device: 'wasm', value: await fn('wasm', true), fellBack: true };
+    }
+    throw err;
+  }
+}
+
+async function run() {
+  if (!state.files.length) { alert('先选择照片'); return; }
+  $('run').disabled = true;
+  const key = $('matting').value;
+  const device0 = await pickDevice();
+  const run = {
+    time: new Date().toISOString(), matting: key, mattingId: MATTING_MODELS[key].id,
+    requestedBackend: $('backend').value, classify: $('doClassify').checked, images: [],
+  };
+  state.runs.push(run);
+  try {
+    const mat = await withFallback(device0, (d, fb) =>
+      loadMatting(key, d, fb ? MATTING_MODELS[key].wasm : $('mattingDtype').value));
+    run.mattingBackend = mat.device; run.mattingDtype = mat.device === device0 ? $('mattingDtype').value : MATTING_MODELS[key].wasm;
+    let sig = null;
+    if (run.classify) {
+      const r = await withFallback(device0, (d, fb) => loadSiglip(d,
+        fb ? SIGLIP.wasm : $('visionDtype').value, fb ? SIGLIP.wasm : $('textDtype').value));
+      sig = r.value; run.siglipBackend = r.device;
+      run.siglipDtype = r.device === device0 ? { vision: $('visionDtype').value, text: $('textDtype').value } : { vision: SIGLIP.wasm, text: SIGLIP.wasm };
+    }
+    state.env.lastBackend = [run.mattingBackend, run.siglipBackend].filter(Boolean).join(' / ');
+    renderEnv();
+
+    const section = document.createElement('div');
+    section.innerHTML = `<h2>${MATTING_MODELS[key].label} · ${run.mattingBackend}/${run.mattingDtype}${sig ? ` · SigLIP ${run.siglipBackend}` : ''}</h2>`;
+    $('results').prepend(section);
+
+    for (const [idx, file] of state.files.entries()) {
+      const rec = { name: file.name, index: idx };
+      run.images.push(rec);
+      log(`处理 ${idx + 1}/${state.files.length} ${file.name}`);
+      const card = document.createElement('div'); card.className = 'card';
+      section.appendChild(card);
+      try {
+        const src = await fileToCanvas(file);
+        rec.size = `${src.width}x${src.height}`;
+        let m;
+        try { m = await runMatting(mat.value, src); }
+        catch (err) {
+          // WebGPU 推理失败（例如算子超出设备限制）时，自动模式下换 WASM 重试
+          if (run.mattingBackend !== 'webgpu' || $('backend').value !== 'auto') throw err;
+          recordError(`抠图 WebGPU 推理 ${file.name}，回退 WASM`, err);
+          run.mattingFallback = String(err?.message ?? err).slice(0, 300);
+          run.mattingBackend = 'wasm'; run.mattingDtype = MATTING_MODELS[key].wasm;
+          mat.value = await loadMatting(key, 'wasm', run.mattingDtype);
+          section.querySelector('h2').textContent += ' → 回退 wasm/' + run.mattingDtype;
+          m = await runMatting(mat.value, src);
+        }
+        rec.mattingBackend = run.mattingBackend;
+        rec.mattingMs = Math.round(m.ms); rec.foregroundRatio = m.foregroundRatio;
+        const png = m.cut.toDataURL('image/png');
+        card.innerHTML = `<div><b>${file.name}</b> · 抠图 ${fmtMs(m.ms)} · 前景 ${(m.foregroundRatio * 100).toFixed(0)}%</div>
+          <div class="imgs"><div><img src="${src.toDataURL('image/jpeg', .8)}"></div>
+          <div class="white"><img src="${png}"></div><div class="checker"><img src="${png}"></div></div>`;
+        if (sig) {
+          const c = await runClassify(sig, m.white);
+          rec.classifyMs = Math.round(c.ms); rec.classes = c.result;
+          card.innerHTML += `<div>分类 ${fmtMs(c.ms)}</div><table>${Object.entries(c.result).map(([g, top]) =>
+            `<tr><th>${GROUPS[g].zh}</th>${top.map((t) => `<td>${t.zh} ${(t.score * 100).toFixed(0)}%</td>`).join('')}</tr>`).join('')}</table>`;
+        }
+      } catch (err) {
+        rec.error = String(err?.message ?? err);
+        card.innerHTML += `<div style="color:#b00">${file.name}：${rec.error}</div>`;
+        recordError(`处理 ${file.name}`, err);
+      }
+    }
+    state.env.lastBackend = [run.mattingBackend, run.siglipBackend].filter(Boolean).join(' / ');
+    renderEnv();
+    const ms = run.images.filter((i) => i.mattingMs != null).map((i) => i.mattingMs);
+    const cs = run.images.filter((i) => i.classifyMs != null).map((i) => i.classifyMs);
+    const avg = (a) => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null;
+    // 第 1 张通常包含 WebGPU 着色器编译，单独统计
+    run.summary = { mattingAvgMs: avg(ms), mattingAvgMsExcludingFirst: avg(ms.slice(1)), classifyAvgMs: avg(cs), classifyAvgMsExcludingFirst: avg(cs.slice(1)), errors: run.images.filter((i) => i.error).length };
+    log(`本轮完成：${JSON.stringify(run.summary)}`);
+  } catch (err) {
+    run.error = String(err?.message ?? err);
+    recordError('运行', err);
+  } finally {
+    run.done = true;
+    $('run').disabled = false;
+  }
+}
+
+function resultJson() {
+  return JSON.stringify({ env: state.env, loads: state.loads, runs: state.runs, errors: state.errors }, null, 2);
+}
+
+async function copyJson() {
+  const text = resultJson();
+  try { await navigator.clipboard.writeText(text); log('已复制结果 JSON'); }
+  catch (err) {
+    const ta = $('jsonOut'); ta.hidden = false; ta.value = text; ta.select();
+    log('剪贴板不可用，请手动复制下方文本框');
+  }
+}
+
+async function clearCache() {
+  await caches.delete(CACHE_NAME);
+  loaded.clear();
+  log('已清除模型缓存，刷新页面后生效');
+  await refreshStorage(); renderEnv();
+}
+
+// ---------- 界面 ----------
+function fillDtypes(sel, list, preferred) {
+  sel.innerHTML = list.map((d) => `<option ${d === preferred ? 'selected' : ''}>${d}</option>`).join('');
+}
+function syncDtypes() {
+  const device = $('backend').value === 'wasm' || ($('backend').value === 'auto' && !state.env.webgpuAdapter) ? 'wasm' : 'webgpu';
+  const m = MATTING_MODELS[$('matting').value];
+  fillDtypes($('mattingDtype'), m.dtypes, params.get('mattingDtype') ?? m[device]);
+  fillDtypes($('visionDtype'), SIGLIP.dtypes, params.get('visionDtype') ?? SIGLIP[device]);
+  fillDtypes($('textDtype'), SIGLIP.dtypes, params.get('textDtype') ?? SIGLIP[device]);
+  $('licenseNote').textContent = m.note ?? '';
+}
+
+// 本地测试钩子：?samples=../private/samples/ 从本地 http.server 目录列表读取图片（线上该目录不存在）
+async function loadSamplesFromUrl(dir) {
+  const base = new URL(dir, location.href);
+  const html = await (await fetch(base)).text();
+  const names = [...html.matchAll(/href="([^"]+\.(?:jpe?g|png|webp|heic))"/gi)].map((m) => decodeURIComponent(m[1]));
+  const limit = +(params.get('limit') ?? names.length);
+  const files = [];
+  for (const n of names.slice(0, limit)) {
+    const blob = await (await fetch(new URL(n, base))).blob();
+    files.push(new File([blob], n, { type: blob.type }));
+  }
+  return files;
+}
+
+const params = new URLSearchParams(location.search);
+$('matting').innerHTML = Object.entries(MATTING_MODELS).map(([k, m]) => `<option value="${k}">${m.label}</option>`).join('');
+if (params.get('matting')) $('matting').value = params.get('matting');
+if (params.get('backend')) $('backend').value = params.get('backend');
+if (params.get('classify') === '0') $('doClassify').checked = false;
+$('files').addEventListener('change', (e) => { state.files = [...e.target.files]; $('fileCount').textContent = `${state.files.length} 张`; });
+$('matting').addEventListener('change', syncDtypes);
+$('backend').addEventListener('change', syncDtypes);
+$('run').addEventListener('click', run);
+$('copy').addEventListener('click', copyJson);
+$('clearCache').addEventListener('click', clearCache);
+env.allowLocalModels = false; // 只从 Hugging Face 加载，避免向本站请求 /models/
+
+await detectEnv();
+syncDtypes();
+log(`Transformers.js ${TJS_VERSION} 已加载`);
+if (params.get('samples')) {
+  try {
+    state.files = await loadSamplesFromUrl(params.get('samples'));
+    $('fileCount').textContent = `${state.files.length} 张（本地样本）`;
+    log(`已读取本地样本 ${state.files.length} 张`);
+    if (params.get('autorun') === '1') await run();
+  } catch (err) { recordError('读取本地样本', err); }
+}
+</script>
+</body>
+</html>
