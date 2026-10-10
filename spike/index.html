@@ -93,6 +93,13 @@
 <h2>测试结果</h2>
 <div id="results"></div>
 
+<h2>关于</h2>
+<p class="note" id="about">本页仅供个人和家人朋友免费使用，非商用。抠图模型使用 BRIA AI 的
+<a id="aboutMatting" target="_blank" rel="noopener">RMBG-1.4</a>，
+其许可为 Bria 非商用许可（source-available，仅限非商用使用）；商用须获得 Bria 商业许可。
+分类模型 <a href="https://huggingface.co/Marqo/marqo-fashionSigLIP" target="_blank" rel="noopener">Marqo-FashionSigLIP</a> 为 Apache-2.0；
+运行库 <a href="https://github.com/huggingface/transformers.js" target="_blank" rel="noopener">Transformers.js</a> 为 Apache-2.0。</p>
+
 <script type="module">
 import {
   env, AutoModel, AutoProcessor, AutoTokenizer, SiglipTextModel, SiglipVisionModel, RawImage, softmax,
@@ -118,10 +125,10 @@ const MATTING_MODELS = {
     input: 'input', output: 'output', sigmoid: false,
   },
   rmbg: {
-    label: 'RMBG-1.4（仅对照·非商用）', id: 'briaai/RMBG-1.4',
+    label: 'RMBG-1.4（应用内抠图，Bria 非商用许可）', id: 'briaai/RMBG-1.4',
     dtypes: ['fp16', 'fp32', 'quantized'], webgpu: 'fp16', wasm: 'quantized',
     input: 'input', output: 'output', sigmoid: false, config: { model_type: 'custom' },
-    note: 'RMBG-1.4 为 Bria 非商用许可证，只用于对照，不能进入正式应用。',
+    note: 'RMBG-1.4 为 Bria 非商用许可，仅限个人非商用使用；商用前须替换模型或购买 Bria 商业许可。',
   },
 };
 const SIGLIP = {
@@ -766,6 +773,7 @@ async function loadSamplesFromUrl(dir) {
 }
 
 const params = new URLSearchParams(location.search);
+$('aboutMatting').href = `https://huggingface.co/${MATTING_MODELS.rmbg.id}`;
 $('matting').innerHTML = '<option value="none">不抠图</option>' +
   Object.entries(MATTING_MODELS).map(([k, m]) => `<option value="${k}">${m.label}</option>`).join('');
 for (const id of ['matting', 'backend', 'textSource']) if (params.get(id)) $(id).value = params.get(id);
