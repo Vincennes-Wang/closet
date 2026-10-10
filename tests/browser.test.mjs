@@ -82,7 +82,7 @@ test('应用：录入 2 件（透明 PNG、无透明 JPEG），刷新后仍在�
   const cards = await chrome.evaluate(`[...document.querySelectorAll('#pending .card')].map((c) => ({
     hint: !!c.querySelector('.hint'), alpha: c.querySelector('.thumb').classList.contains('alpha'),
     w: c.querySelector('.thumb').naturalWidth, h: c.querySelector('.thumb').naturalHeight }))`);
-  assert.deepEqual(cards, [{ hint: false, alpha: true, w: 1024, h: 768 }, { hint: true, alpha: false, w: 1024, h: 768 }]);
+  assert.deepEqual(cards, [{ hint: false, alpha: true, w: 1024, h: 768 }, { hint: false, alpha: false, w: 1024, h: 768 }]);
 
   // 未选分类不能保存
   await chrome.evaluate(`document.querySelector('#pending .card .actions .primary').click()`);

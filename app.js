@@ -91,9 +91,7 @@ function renderPending(card, img) {
       render();
     } catch (err) { msg.textContent = `保存失败：${err.message}`; }
   });
-  const hint = img.hasAlpha
-    ? el('p', { className: 'muted', textContent: '已抠图（透明背景）' })
-    : el('p', { className: 'hint', textContent: '这张图没有透明背景。可以在"文件"App 里选中照片 → "移除背景"，再重新上传。' });
+  const hint = img.hasAlpha ? el('p', { className: 'muted', textContent: '已抠图（透明背景）' }) : '';
   card.replaceChildren(
     el('img', { src: url, alt: '', className: img.hasAlpha ? 'thumb alpha' : 'thumb' }),
     hint, fields.node, msg,
