@@ -113,6 +113,10 @@ const MAX_SIDE = 1024; // 先缩图，避免 iPhone 原图占满内存
 const EMBEDDINGS_URL = 'label-embeddings.json';
 const STEP_KEY = 'spike-last-step'; // 记录最后一步，页面崩溃后重开能看到停在哪
 const SESSION_STARTED = new Date().toISOString();
+const BEACON = new URLSearchParams(location.search).get('beacon') === '1';
+// 本地调试钩子：?slow=毫秒 时每个阶段后停顿，便于外部按阶段读取进程内存
+const SLOW = +(new URLSearchParams(location.search).get('slow') ?? 0);
+const stage = async (msg) => { if (!SLOW) return; log(`阶段 ${msg}`); await new Promise((r) => setTimeout(r, SLOW)); };
 const SESSION_KEY = 'spike-session'; // 每一步都保存当前会话 JSON
 const CRASH_KEY = 'spike-crash-session'; // 上次没正常结束的会话 JSON，崩溃后可复制
 
@@ -187,6 +191,8 @@ function log(msg) {
   $('status').textContent += line + '\n';
   $('status').scrollTop = 1e9;
   console.log(line);
+  // 本地调试钩子：?beacon=1 时把日志发给本地服务器（出现在 http.server 访问日志里），用于无法自动化的 Safari
+  if (BEACON) fetch('/__beacon?' + encodeURIComponent(msg)).catch(() => {});
   try {
     localStorage.setItem(STEP_KEY, line);
     localStorage.setItem(SESSION_KEY, resultJson());
@@ -647,10 +653,12 @@ async function run() {
       try {
         const { canvas: src } = await fileToCanvas(file);
         rec.size = `${src.width}x${src.height}`;
+        await stage(`${idx + 1} 解码完成`);
         let target = src, imgsHtml = `<div><img src="${src.toDataURL('image/jpeg', .8)}"></div>`, head = '';
         if (mat) {
           const m = await runMatting(mat, src);
           rec.mattingMs = Math.round(m.ms); rec.foregroundRatio = m.foregroundRatio;
+          await stage(`${idx + 1} 抠图完成`);
           const png = m.cut.toDataURL('image/png');
           imgsHtml += `<div class="white"><img src="${png}"></div><div class="checker"><img src="${png}"></div>`;
           head = ` · 抠图 ${fmtMs(m.ms)} · 前景 ${(m.foregroundRatio * 100).toFixed(0)}%`;
@@ -658,6 +666,7 @@ async function run() {
           m.cut.width = 0; // iOS 上 canvas 内存要显式释放
         }
         card.innerHTML = `<div><b>${file.name}</b>${head}</div><div class="imgs">${imgsHtml}</div>`;
+        await stage(`${idx + 1} 显示完成`);
         if (run.serial) targets[idx] = await new Promise((r) => target.toBlob(r, 'image/jpeg', 0.92));
         else if (clf) await classifyInto(clf, rec, card, target, idx);
         if (target !== src) target.width = 0;
