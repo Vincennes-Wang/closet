@@ -1,8 +1,8 @@
 # PROGRESS
 - 状态：进行中
-- 当前阶段：阶段 1 — 应用骨架 + 手动录入（计划待确认）
-- 累计用时：5
-- 线上地址：https://vincennes-wang.github.io/closet/spike/
+- 当前阶段：阶段 1 — 应用骨架 + 手动录入（代码完成，待 Mac Safari 和 iPhone 真机验收）
+- 累计用时：6
+- 线上地址：https://vincennes-wang.github.io/closet/（应用）、https://vincennes-wang.github.io/closet/spike/（阶段 0 验证页）
 
 ## 阶段 0 总结（2026-10-11 结束）
 - 结论：
@@ -12,9 +12,41 @@
   - 阶段 5 接入 AI 抠图时采用"每批 3 张 + 结果存 IndexedDB + 自动刷新页面续传"。验收：连续 3 批共 9 张不崩溃。
   - iOS 系统抠图（透明 PNG）始终作为批量录入和兜底方案。
   - 分类模型用 fashionSigLIP q4f16，只加载图像模型，在 Worker 中运行（阶段 5 接入）。
-- 详细测试记录见下方"最近一次工作"，以及提交 4e07ac0 之前的历史。
+- 详细测试记录见文末"阶段 0 详细记录"。
 
-## 最近一次工作（2026-10-11）
+## 最近一次工作（2026-10-11，阶段 1）
+- 完成：
+  - 根目录应用：`index.html` + ES modules，无框架、无构建。`spike/` 未改。
+  - PWA：`manifest.webmanifest`、衣架图标（Node 脚本生成，无依赖）、`sw.js` 预缓存应用文件（缓存优先、后台更新，缓存名 `closet-v1`）。启动时调用 `navigator.storage.persist()`，页面顶部显示结果和已用空间。
+  - `store.js`：唯一访问 IndexedDB 的模块。字段按要求，不含价格、材质；保存前校验分类、季节、场景取值。
+  - 录入：拍照 / 相册 / "文件"多选；`createImageBitmap` 直接缩到长边 1024，不存原图；检测透明区域记入 `hasAlpha`，无透明时提示用"文件"App"移除背景"后重新上传；分类单选，季节、场景多选按钮。
+  - 存储格式：透明图 WebP（浏览器不支持带透明的 WebP 时 PNG），不透明图 JPEG 0.9。
+  - 衣橱：按一级分类分组；点开可编辑、归档；"显示已归档"里可恢复或彻底删除（二次确认）。
+  - 测试：`node --test tests/*.test.mjs`，不用 fake-indexeddb，无新依赖。纯函数用 node:test；真实 IndexedDB 和录入流程用 headless Chrome（CDP）。
+- 验证结果：
+  - `node --test tests/*.test.mjs`：8/8 通过，连跑 3 次稳定。覆盖：增删改查、归档 / 恢复、重开数据库数据仍在、录入 2 件（透明 PNG → WebP，不透明 JPEG → JPEG，均缩到 1024×768）、刷新后仍在、编辑、归档、Service Worker 接管后断网刷新仍能打开。
+  - 变异测试：把长边改成 1000，浏览器测试失败；改回后通过。说明测试能发现缩图错误。
+  - 单元测试发现并修复 1 个 bug：`scenes` 传字符串时会被拆成单字，现在会报"必须是数组"。
+  - 浏览器测试第一次全过属于时序巧合：`app.js` 在 `await openStore()` 之后才绑定事件，测试在绑定前就触发了选图。用户手动操作不会碰到。已加就绪标记 `<html data-ready="1">`，测试等它出现再操作。
+  - Mac Safari 27.0.1：`toBlob('image/webp')` 返回 `image/png`，透明图会存 PNG（本地探测页 + 日志确认）；`navigator.storage.persist` 存在。
+  - Mac Safari 录入 5 件：**未做**。safaridriver 未开启，不能自动化，也没有截屏权限。需要用户手动测。
+  - 手机尺寸截图（headless Chrome 390 px 宽）：布局正常，透明图显示棋盘格背景。
+
+## 下次从这里继续
+1. 看用户的 Mac Safari 和 iPhone 验收结果；把 iPhone 的 WebP 检测结果写进 CLAUDE.md「阶段 1 决策」。
+2. 验收通过后进入下一阶段（搭配或导出导入，按总计划）。
+
+## 未解决问题
+- ~~没有可商用、在浏览器跑得通、效果合格的抠图模型~~ — 已决策（2026-10-10）：非商用定位，应用内用 RMBG-1.4，iOS 系统抠图保底。
+- ~~同一页面内 BiRefNet 从 WebGPU 回退到 WASM 后仍报 WebGPU 错误~~ — **已放弃**（2026-10-10）：BiRefNet_lite 不再使用，不排查。
+- iPhone 第一轮失败原因未确认（没有 JSON）。第一轮页面默认加载 BiRefNet + SigLIP fp16（共约 520 MB），第二轮默认什么都不加载；要确认是不是这个原因，可以在 iPhone 上用第一轮的组合再跑一次，但现在已不需要。
+- 系统抠图导入 / 粘贴没有在 iPhone 上验证（用户决定不测）。如果以后要靠系统抠图保底，需要重新验证。
+- ~~iPhone 上抠图：主线程做法第 3 张必崩；Worker + 每 2 张重启做法第 5 张前崩溃~~ — 已决策（2026-10-11）：阶段 5 用"每批 3 张 + 存 IndexedDB + 自动刷新续传"，见阶段 0 总结。
+- 厚度在 q4f16 下和 fp32 有 4/20 不一致，阶段 1 前要用人工标注确认哪个更准。
+- iPhone 上 `toBlob('image/webp')` 能否保留透明：未测。Mac Safari 不能，预计 iPhone 也存 PNG（同为 WebKit，这是推断）。
+- 粘贴导入（照片"拷贝主体"后粘贴）阶段 1 没做，计划阶段 5 与系统抠图一起做。
+
+## 阶段 0 详细记录（2026-10-10 至 10-11）
 - 完成：
   - 仓库初始化（CLAUDE.md、PROGRESS.md、.gitignore）。样本文件夹 `private:samples` 改名为 `private/samples`（原名不会被 `.gitignore` 忽略）。
   - `spike/index.html`：选图 → 抠图（BiRefNet_lite / MODNet / RMBG-1.4）→ fashionSigLIP 零样本分类（品类 / 袖长 / 厚度 top-3）→ 指标面板 → 复制结果 JSON。
@@ -108,14 +140,3 @@
   - 分类（RMBG 抠图后）：品类 top-1 主观看 20/20 合理（Polo衫、针织衫、背心、裤子、连衣裙、外套、衬衫）。袖长对上装基本正确；对裤子无意义，需按品类决定是否显示。厚度结果合理但无标注，未核对。
   - 第二次打开走浏览器缓存：加载表显示"缓存"，SigLIP 加载从 ~3 s 降到 ~0.3 s。
   - Safari：未测（safaridriver 未开启）。iPhone：第一轮一次都没跑通（用户反馈，无 JSON）；第二轮 RMBG 跑通，见上。
-
-## 下次从这里继续
-1. 确认阶段 1 计划（应用骨架 + 手动录入，不含 AI），然后开始写代码。
-
-## 未解决问题
-- ~~没有可商用、在浏览器跑得通、效果合格的抠图模型~~ — 已决策（2026-10-10）：非商用定位，应用内用 RMBG-1.4，iOS 系统抠图保底。
-- ~~同一页面内 BiRefNet 从 WebGPU 回退到 WASM 后仍报 WebGPU 错误~~ — **已放弃**（2026-10-10）：BiRefNet_lite 不再使用，不排查。
-- iPhone 第一轮失败原因未确认（没有 JSON）。第一轮页面默认加载 BiRefNet + SigLIP fp16（共约 520 MB），第二轮默认什么都不加载；要确认是不是这个原因，可以在 iPhone 上用第一轮的组合再跑一次，但现在已不需要。
-- 系统抠图导入 / 粘贴没有在 iPhone 上验证（用户决定不测）。如果以后要靠系统抠图保底，需要重新验证。
-- ~~iPhone 上抠图：主线程做法第 3 张必崩；Worker + 每 2 张重启做法第 5 张前崩溃~~ — 已决策（2026-10-11）：阶段 5 用"每批 3 张 + 存 IndexedDB + 自动刷新续传"，见阶段 0 总结。
-- 厚度在 q4f16 下和 fp32 有 4/20 不一致，阶段 1 前要用人工标注确认哪个更准。

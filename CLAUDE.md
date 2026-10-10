@@ -63,6 +63,13 @@
 - iOS 系统抠图（透明 PNG）始终作为批量录入和兜底方案。
 - 分类模型：fashionSigLIP q4f16，只加载图像模型，在 Worker 中运行（阶段 5 接入）。
 
+### 阶段 1 决策（2026-10-11）
+- 图片存储格式：长边缩到 1024，不存原图。有透明区域的图存 WebP；浏览器不能输出带透明的 WebP 时存 PNG。没有透明区域的图存 JPEG 0.9。启动时用 `image.js` 的 `probeWebpAlpha()` 检测，结果显示在页面"关于"区。
+- WebP 透明实测：Mac Chrome 155 可以；Mac Safari 27.0.1 不可以（`toBlob('image/webp')` 返回 `image/png`），所以 Safari 上透明图存 PNG。iPhone：待真机确认。
+- 衣物记录字段见 `store.js` 的 `newItem()`；分类、季节、场景的取值只在 `options.js` 定义。改了取值要考虑已存数据。
+- `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v1，仓库 `items`）。改表结构必须升版本号并写迁移。
+- Service Worker 缓存名 `closet-vN`（`sw.js`）。改了任何应用文件，发布前把 N 加 1，否则用户手机上一直是旧版本。
+
 ## 已核实的模型（2026-10-10，查 Hugging Face API）
 | 用途 | 仓库 | 许可证 | 备注 |
 |---|---|---|---|
@@ -74,6 +81,8 @@
 | 标签向量 | `spike/label-embeddings.json` | – | 用 fashionSigLIP fp32 文本模型在 Mac 上生成（spike 页面 `?mode=embed`）。改了 `GROUPS` 里的英文 prompt 后必须重新生成 |
 
 ## 目录
+- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`sw.js`、`manifest.webmanifest`、`icons/`）。
+- `tests/`：`node --test tests/*.test.mjs`。`store.test.mjs` 测纯函数；`browser.test.mjs` 用 headless Chrome（CDP，`tests/cdp.mjs`，无依赖）测真实 IndexedDB、录入流程和离线打开。需要本机装有 Chrome。
 - `spike/`：阶段 0 验证页（`index.html` 单文件）和预计算的标签向量 `label-embeddings.json`。
 - `private/`：本地测试照片等，不提交（`private/samples/` 放样本照片）。
 
