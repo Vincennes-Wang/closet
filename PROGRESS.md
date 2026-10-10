@@ -1,6 +1,6 @@
 # PROGRESS
 - 状态：进行中
-- 当前阶段：阶段 0 — 模型可行性验证（收尾：iPhone 上 RMBG 单独可用、分类 q4f16 单独可用；两者同时用待测）
+- 当前阶段：阶段 0 — 模型可行性验证（收尾：iPhone 上 RMBG + 分类同时运行在第 2 张崩溃；串行模式待测）
 - 累计用时：3.5
 - 线上地址：https://vincennes-wang.github.io/closet/spike/
 
@@ -43,6 +43,8 @@
     - "RMBG + q4f16"那次实际用的是 fp16：切换抠图模型时页面把 SigLIP dtype 重置成默认 fp16（页面 bug），旧的 q4f16 也没释放。崩溃时内存里有 q4f16 + RMBG fp16 + SigLIP fp16，约 330 MB 权重，崩在处理第 1 张时。
     - 已修：切换抠图模型不再改 SigLIP dtype；同一模型换 dtype 或后端时先释放旧的。Mac Chrome 按用户操作顺序复现验证通过（dtype 保持 q4f16；改 fp16 时日志出现"释放 siglip-vision|webgpu|q4f16"）。
     - 判断：iPhone 上的崩溃与同时驻留的模型总量有关（88 MB 单独可以，54 MB 单独可以，88+186 MB 不行）。具体内存上限未测。
+  - **iPhone 第三次实测（iOS 27）**：RMBG fp16 + SigLIP q4f16 同时加载成功（共 142 MB）。第 1 张完整跑完（抠图 1693 ms，分类 204 ms，"背心 97%"正确），第 2 张开始处理（"处理 2/3"，分类前）时页面刷新。说明问题不只是权重总量，还和每张图处理时的内存峰值或逐张累积有关。原因未确认：RMBG 单独在 iPhone 上只测过 1 张，单独连跑多张是否也会崩还不知道。
+    - spike 新增"串行"选项：先抠完全部图并释放 RMBG，再加载 SigLIP 分类；抠图结果暂存为 JPEG Blob；每张处理完把 canvas 宽度设为 0（iOS 要显式释放 canvas 内存）。Mac Chrome 验证：步骤顺序正确（抠完 → 释放 rmbg → 加载 siglip → 分类）；5 张样本串行与非串行 top-1 完全一致（5/5）。
   - **第一轮**结果见下表。
 - 验证结果（第一轮，Mac Chrome 155，Apple M5，20 张样本，长边缩到 1024 px）：
 
@@ -65,8 +67,8 @@
   - Safari：未测（safaridriver 未开启）。iPhone：第一轮一次都没跑通（用户反馈，无 JSON）；第二轮 RMBG 跑通，见上。
 
 ## 下次从这里继续
-1. iPhone 测 RMBG fp16 + SigLIP q4f16（共约 142 MB）在新打开的页面里能否一起跑。
-2. 能跑 → 阶段 0 结束，按 `03_经验日志.md` 写复盘，进入阶段 1。不能跑 → 正式应用里先抠图、释放 RMBG，再加载 SigLIP 分类（串行），或者 RMBG 改用 WASM quantized（44 MB）。
+1. 看 iPhone 三项测试结果：RMBG 单独 3 张、分类单独 3 张、串行 3 张。
+2. 串行能跑 → 正式应用采用串行流程，阶段 0 结束，写复盘，进入阶段 1。RMBG 单独 3 张就崩 → 试 RMBG WASM quantized（44 MB），或降低抠图输入分辨率。
 3. 用 20 张样本人工标注品类 / 袖长 / 厚度，算 fashionSigLIP 准确率（袖长只对上装计分）。
 
 ## 未解决问题
@@ -74,5 +76,5 @@
 - ~~同一页面内 BiRefNet 从 WebGPU 回退到 WASM 后仍报 WebGPU 错误~~ — **已放弃**（2026-10-10）：BiRefNet_lite 不再使用，不排查。
 - iPhone 第一轮失败原因未确认（没有 JSON）。第一轮页面默认加载 BiRefNet + SigLIP fp16（共约 520 MB），第二轮默认什么都不加载；要确认是不是这个原因，可以在 iPhone 上用第一轮的组合再跑一次，但现在已不需要。
 - 系统抠图导入 / 粘贴没有在 iPhone 上验证（用户决定不测）。如果以后要靠系统抠图保底，需要重新验证。
-- iPhone 上 RMBG + SigLIP q4f16 同时运行还没测到（上次实际是 fp16，见上）。
+- iPhone 上 RMBG + SigLIP q4f16 同时运行，第 2 张崩溃，原因未确认。确认方法：iPhone 上 RMBG 单独跑 3 张。
 - 厚度在 q4f16 下和 fp32 有 4/20 不一致，阶段 1 前要用人工标注确认哪个更准。

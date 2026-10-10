@@ -71,6 +71,7 @@
   <label>抠图模型 <select id="matting"></select></label>
   <label>抠图 dtype <select id="mattingDtype"></select></label>
   <label><input type="checkbox" id="doClassify" checked> 运行分类</label>
+  <label><input type="checkbox" id="serial"> 串行（先全部抠图并释放抠图模型，再加载分类模型）</label>
   <div class="note" id="licenseNote"></div>
   <button class="primary" id="run">运行</button>
   <button id="compare">对比预计算 vs 实时</button>
@@ -590,6 +591,26 @@ async function prepareMatting(run) {
   return mat.value;
 }
 
+// 释放某个模型的所有已加载版本（串行模式下抠完图后释放抠图模型）
+async function releaseModel(name) {
+  for (const [k, obj] of loaded) {
+    if (k.startsWith(name + '|')) {
+      try { await obj.dispose?.(); } catch (err) { recordError(`释放 ${k}`, err); }
+      loaded.delete(k);
+      log(`释放 ${k}`);
+    }
+  }
+}
+
+async function classifyInto(clf, rec, card, target, idx) {
+  log(`分类 ${idx + 1}/${state.files.length} ${rec.name}`);
+  const t0 = performance.now();
+  const img = await imageEmbedding(clf, target);
+  rec.classes = score(img, clf.embeds);
+  rec.classifyMs = Math.round(performance.now() - t0);
+  card.insertAdjacentHTML('beforeend', `<div>分类 ${fmtMs(rec.classifyMs)}</div>${classesTable(rec.classes)}`);
+}
+
 async function run() {
   if (!state.files.length) { alert('先选择照片'); return; }
   $('run').disabled = true;
@@ -598,27 +619,31 @@ async function run() {
     time: new Date().toISOString(), matting: key, mattingId: MATTING_MODELS[key]?.id ?? null,
     requestedBackend: $('backend').value, classify: $('doClassify').checked, images: [],
   };
+  run.serial = $('serial').checked && key !== 'none' && run.classify;
   state.runs.push(run);
   try {
     const mat = await prepareMatting(run);
     let clf = null;
-    if (run.classify) {
+    const loadClassifier = async () => {
       clf = await getClassifier();
       Object.assign(run, { siglipBackend: clf.device, visionDtype: clf.visionDtype, textSource: clf.textSource });
-    }
-    state.env.lastBackend = [run.mattingBackend, run.siglipBackend].filter(Boolean).join(' / ');
-    renderEnv();
+      state.env.lastBackend = [run.mattingBackend, run.siglipBackend].filter(Boolean).join(' / ');
+      renderEnv();
+    };
+    // 非串行：两个模型同时留在内存里，逐张抠图 + 分类
+    if (run.classify && !run.serial) await loadClassifier();
 
     const section = document.createElement('div');
-    section.innerHTML = `<h2>${MATTING_MODELS[key]?.label ?? '不抠图'}${mat ? ` · ${run.mattingBackend}/${run.mattingDtype}` : ''}${clf ? ` · SigLIP ${clf.device}/${clf.visionDtype} · ${clf.textSource}` : ''}</h2>`;
+    section.innerHTML = `<h2>${MATTING_MODELS[key]?.label ?? '不抠图'}${mat ? ` · ${run.mattingBackend}/${run.mattingDtype}` : ''}${run.serial ? ' · 串行' : ''}</h2>`;
     $('results').prepend(section);
 
+    const cards = [], targets = []; // 串行模式下暂存白底图（JPEG Blob，比 canvas 省内存）
     for (const [idx, file] of state.files.entries()) {
       const rec = { name: file.name, index: idx };
       run.images.push(rec);
       log(`处理 ${idx + 1}/${state.files.length} ${file.name}`);
       const card = document.createElement('div'); card.className = 'card';
-      section.appendChild(card);
+      section.appendChild(card); cards.push(card);
       try {
         const { canvas: src } = await fileToCanvas(file);
         rec.size = `${src.width}x${src.height}`;
@@ -630,20 +655,35 @@ async function run() {
           imgsHtml += `<div class="white"><img src="${png}"></div><div class="checker"><img src="${png}"></div>`;
           head = ` · 抠图 ${fmtMs(m.ms)} · 前景 ${(m.foregroundRatio * 100).toFixed(0)}%`;
           target = m.white;
+          m.cut.width = 0; // iOS 上 canvas 内存要显式释放
         }
         card.innerHTML = `<div><b>${file.name}</b>${head}</div><div class="imgs">${imgsHtml}</div>`;
-        if (clf) {
-          log(`分类 ${idx + 1}/${state.files.length} ${file.name}`);
-          const t0 = performance.now();
-          const img = await imageEmbedding(clf, target);
-          rec.classes = score(img, clf.embeds);
-          rec.classifyMs = Math.round(performance.now() - t0);
-          card.innerHTML += `<div>分类 ${fmtMs(rec.classifyMs)}</div>${classesTable(rec.classes)}`;
-        }
+        if (run.serial) targets[idx] = await new Promise((r) => target.toBlob(r, 'image/jpeg', 0.92));
+        else if (clf) await classifyInto(clf, rec, card, target, idx);
+        if (target !== src) target.width = 0;
+        src.width = 0;
       } catch (err) {
         rec.error = String(err?.message ?? err);
-        card.innerHTML += `<div class="bad">${file.name}：${rec.error}</div>`;
+        card.insertAdjacentHTML('beforeend', `<div class="bad">${file.name}：${rec.error}</div>`);
         recordError(`处理 ${file.name}`, err);
+      }
+    }
+
+    // 串行：抠完全部图后释放抠图模型，再加载分类模型
+    if (run.serial) {
+      await releaseModel(key);
+      await loadClassifier();
+      for (const [idx, blob] of targets.entries()) {
+        if (!blob) continue;
+        const rec = run.images[idx];
+        try {
+          const { canvas } = await fileToCanvas(blob);
+          await classifyInto(clf, rec, cards[idx], canvas, idx);
+          canvas.width = 0;
+        } catch (err) {
+          rec.error = String(err?.message ?? err);
+          recordError(`分类 ${rec.name}`, err);
+        }
       }
     }
     const ms = run.images.filter((i) => i.mattingMs != null).map((i) => i.mattingMs);
@@ -801,6 +841,7 @@ $('matting').innerHTML = '<option value="none">不抠图</option>' +
   Object.entries(MATTING_MODELS).map(([k, m]) => `<option value="${k}">${m.label}</option>`).join('');
 for (const id of ['matting', 'backend', 'textSource']) if (params.get(id)) $(id).value = params.get(id);
 if (params.get('classify') === '0') $('doClassify').checked = false;
+if (params.get('serial') === '1') $('serial').checked = true;
 $('files').addEventListener('change', (e) => { state.files = [...e.target.files]; $('fileCount').textContent = `${state.files.length} 张`; });
 $('importFiles').addEventListener('change', (e) => { handleImports([...e.target.files], 'file'); e.target.value = ''; });
 $('matting').addEventListener('change', syncMattingDtype);
