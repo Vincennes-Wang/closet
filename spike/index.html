@@ -77,6 +77,14 @@
   <button id="compare">对比预计算 vs 实时</button>
 </fieldset>
 
+<fieldset>
+  <legend>D. Worker 模式（iPhone 用：模型只在 Worker 里，每 N 张重启）</legend>
+  <div>照片用 C 区选的；SigLIP 图像 dtype 用 B 区的。流程：先全部抠图（RMBG），再全部分类。</div>
+  <label>每 N 张重启 Worker <input type="number" id="workerN" value="2" min="1" max="50" style="width:4em"></label>
+  <label><input type="checkbox" id="workerClassify" checked> 抠图后分类</label>
+  <button class="primary" id="workerRun">Worker 模式运行</button>
+</fieldset>
+
 <button class="primary" id="copy">复制结果 JSON</button>
 <button id="copyCrash" hidden>复制上次崩溃会话 JSON</button>
 <button id="clearCache">清除模型缓存</button>
@@ -179,7 +187,7 @@ const GROUPS = {
 // ---------- 状态 ----------
 const $ = (id) => document.getElementById(id);
 const state = {
-  env: {}, loads: [], runs: [], imports: [], consistency: [], errors: [],
+  env: {}, loads: [], runs: [], imports: [], consistency: [], workerRuns: [], errors: [],
   files: [],
 };
 window.__spike = state; // 供本地自动化测试读取
@@ -792,8 +800,152 @@ async function generateEmbeddings() {
   }
 }
 
+// ---------- D. Worker 模式 ----------
+// 主线程只缩图，不解码全尺寸原图：先读尺寸（onload 不触发全图解码），再让 createImageBitmap 直接输出长边 1024 的位图
+async function downscaleBitmap(blob) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = new Image();
+    await new Promise((ok, fail) => { img.onload = ok; img.onerror = () => fail(new Error('读取图片尺寸失败')); img.src = url; });
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const s = Math.min(1, MAX_SIDE / Math.max(w, h));
+    return await createImageBitmap(blob, { resizeWidth: Math.round(w * s), resizeHeight: Math.round(h * s), resizeQuality: 'high', imageOrientation: 'from-image' });
+  } finally { URL.revokeObjectURL(url); }
+}
+
+// 一个 Worker 同一时间只处理一个请求
+function workerCall(w, msg, transfer = []) {
+  return new Promise((resolve, reject) => {
+    w.onmessage = ({ data }) => data.ok ? resolve(data) : reject(new Error(data.error));
+    w.onerror = (e) => reject(new Error(e.message || 'Worker 出错'));
+    w.postMessage({ id: Date.now(), ...msg }, transfer);
+  });
+}
+
+function workerInitMsg(task) {
+  const device = currentDevice();
+  if (task === 'matting') {
+    const m = MATTING_MODELS.rmbg;
+    return { type: 'init', task, modelId: m.id, device, dtype: m.webgpu, wasmDtype: m.wasm, input: m.input, output: m.output, config: m.config };
+  }
+  return { type: 'init', task, modelId: SIGLIP.id, device, dtype: $('visionDtype').value, wasmDtype: SIGLIP.wasm };
+}
+
+async function startWorker(task, rec) {
+  const t0 = performance.now();
+  const w = new Worker('rmbg-worker.js', { type: 'module' });
+  log(`新建 Worker（${task}）并加载模型`);
+  const ready = await workerCall(w, workerInitMsg(task));
+  rec.loads.push({ task, device: ready.device, dtype: ready.dtype, bytes: ready.bytes, downloadedBytes: ready.downloadedBytes, fromCache: ready.fromCache, loadMs: ready.loadMs });
+  rec.backend[task] = `${ready.device}/${ready.dtype}`;
+  return { w, startMs: Math.round(performance.now() - t0) };
+}
+
+async function stopWorker(w) {
+  const t0 = performance.now();
+  let disposeMs = null;
+  try { disposeMs = (await workerCall(w, { type: 'dispose' })).ms; }
+  finally { w.terminate(); }
+  return { disposeMs, stopMs: Math.round(performance.now() - t0) };
+}
+
+// 按"每 N 张重启"逐张处理；handle(worker, index) 处理一张
+async function workerPhase(task, rec, count, handle) {
+  const N = rec.N;
+  let cur = await startWorker(task, rec);
+  rec.restarts.push({ task, beforeImage: 0, totalMs: cur.startMs });
+  try {
+    for (let i = 0; i < count; i++) {
+      if (i > 0 && i % N === 0) {
+        log(`重启 Worker（${task}，已处理 ${i} 张）`);
+        const stop = await stopWorker(cur.w);
+        await stage(`W ${task} terminate 后`);
+        cur = await startWorker(task, rec);
+        rec.restarts.push({ task, beforeImage: i, disposeMs: stop.disposeMs, totalMs: stop.stopMs + cur.startMs });
+        await stage(`W ${task} 重启后`);
+      }
+      await handle(cur.w, i);
+      await stage(`W ${task} ${i + 1} 完成`);
+    }
+  } finally { await stopWorker(cur.w).catch(() => {}); }
+}
+
+async function workerRun() {
+  if (!state.files.length) { alert('先在 C 区选择照片'); return; }
+  const classify = $('workerClassify').checked;
+  if (classify && !precomputed) { alert('预计算文字向量不可用'); return; }
+  $('workerRun').disabled = true;
+  const rec = {
+    worker: true, time: new Date().toISOString(), N: Math.max(1, +$('workerN').value || 2), classify,
+    visionDtype: $('visionDtype').value, backend: {}, loads: [], restarts: [], images: [],
+  };
+  state.workerRuns.push(rec); state.runs.push(rec);
+  const section = document.createElement('div');
+  section.innerHTML = `<h2>Worker 模式 · 每 ${rec.N} 张重启 · RMBG${classify ? ` → SigLIP ${rec.visionDtype}` : ''}</h2>`;
+  $('results').prepend(section);
+  const whites = [], cards = [];
+  try {
+    await workerPhase('matting', rec, state.files.length, async (w, i) => {
+      const file = state.files[i];
+      const img = { name: file.name, index: i };
+      rec.images.push(img);
+      log(`抠图 ${i + 1}/${state.files.length} ${file.name}（N=${rec.N}）`);
+      const card = document.createElement('div'); card.className = 'card'; section.appendChild(card); cards[i] = card;
+      try {
+        const bitmap = await downscaleBitmap(file);
+        img.size = `${bitmap.width}x${bitmap.height}`;
+        const r = await workerCall(w, { type: 'run', bitmap }, [bitmap]);
+        Object.assign(img, { mattingMs: r.ms, foregroundRatio: r.foregroundRatio });
+        whites[i] = r.white;
+        // 显示用 object URL，图片加载完立即 revoke
+        const url = URL.createObjectURL(r.cut);
+        card.innerHTML = `<div><b>${file.name}</b> · 抠图 ${fmtMs(r.ms)} · 前景 ${(r.foregroundRatio * 100).toFixed(0)}%</div>
+          <div class="imgs"><div class="checker"><img></div></div>`;
+        const el = card.querySelector('img');
+        el.onload = el.onerror = () => URL.revokeObjectURL(url);
+        el.src = url;
+      } catch (err) {
+        img.error = String(err?.message ?? err);
+        card.insertAdjacentHTML('beforeend', `<div class="bad">${file.name}：${img.error}</div>`);
+        recordError(`Worker 抠图 ${file.name}`, err);
+        throw err; // Worker 出错后状态不可信，停止本轮
+      }
+    });
+    if (classify) {
+      const idx = whites.map((b, i) => b ? i : -1).filter((i) => i >= 0);
+      await workerPhase('classify', rec, idx.length, async (w, k) => {
+        const i = idx[k], img = rec.images[i];
+        log(`分类 ${k + 1}/${idx.length} ${img.name}（N=${rec.N}）`);
+        const bitmap = await createImageBitmap(whites[i]);
+        const r = await workerCall(w, { type: 'run', bitmap }, [bitmap]);
+        img.classes = score(r.embedding, precomputed);
+        img.classifyMs = r.ms;
+        cards[i].insertAdjacentHTML('beforeend', `<div>分类 ${fmtMs(r.ms)}</div>${classesTable(img.classes)}`);
+        whites[i] = null;
+      });
+    }
+    const avg = (a) => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null;
+    const pick = (k) => rec.images.map((i) => i[k]).filter((v) => v != null);
+    const restartMs = (t) => rec.restarts.filter((r) => r.task === t && r.beforeImage > 0).map((r) => r.totalMs);
+    rec.summary = {
+      images: rec.images.length, mattingAvgMs: avg(pick('mattingMs')), classifyAvgMs: avg(pick('classifyMs')),
+      mattingRestarts: restartMs('matting').length, mattingRestartAvgMs: avg(restartMs('matting')),
+      classifyRestarts: restartMs('classify').length, classifyRestartAvgMs: avg(restartMs('classify')),
+      errors: rec.images.filter((i) => i.error).length,
+    };
+    log(`Worker 模式完成：${JSON.stringify(rec.summary)}`);
+  } catch (err) {
+    rec.error = String(err?.message ?? err);
+    recordError('Worker 模式', err);
+  } finally {
+    rec.done = true;
+    $('workerRun').disabled = false;
+    markIdle();
+  }
+}
+
 function resultJson() {
-  return JSON.stringify({ sessionStartedAt: SESSION_STARTED, savedAt: new Date().toISOString(), env: state.env, loads: state.loads, imports: state.imports, runs: state.runs.filter((r) => !r.perGroup), consistency: state.consistency, errors: state.errors }, null, 2);
+  return JSON.stringify({ sessionStartedAt: SESSION_STARTED, savedAt: new Date().toISOString(), env: state.env, loads: state.loads, imports: state.imports, runs: state.runs.filter((r) => !r.perGroup && !r.worker), workerRuns: state.workerRuns, consistency: state.consistency, errors: state.errors }, null, 2);
 }
 
 async function copyText(text, label) {
@@ -851,12 +1003,15 @@ $('matting').innerHTML = '<option value="none">不抠图</option>' +
 for (const id of ['matting', 'backend', 'textSource']) if (params.get(id)) $(id).value = params.get(id);
 if (params.get('classify') === '0') $('doClassify').checked = false;
 if (params.get('serial') === '1') $('serial').checked = true;
+if (params.get('n')) $('workerN').value = params.get('n');
+if (params.get('classify') === '0') $('workerClassify').checked = false;
 $('files').addEventListener('change', (e) => { state.files = [...e.target.files]; $('fileCount').textContent = `${state.files.length} 张`; });
 $('importFiles').addEventListener('change', (e) => { handleImports([...e.target.files], 'file'); e.target.value = ''; });
 $('matting').addEventListener('change', syncMattingDtype);
 $('backend').addEventListener('change', syncDtypes);
 $('run').addEventListener('click', run);
 $('compare').addEventListener('click', compare);
+$('workerRun').addEventListener('click', workerRun);
 $('copy').addEventListener('click', copyJson);
 $('copyCrash').addEventListener('click', () => copyText(localStorage.getItem(CRASH_KEY) ?? '{}', '上次崩溃会话'));
 $('clearCache').addEventListener('click', clearCache);
@@ -875,6 +1030,7 @@ else if (params.get('samples')) {
     log(`已读取本地样本 ${state.files.length} 张`);
     if (params.get('autorun') === '1') await run();
     else if (params.get('autorun') === 'compare') await compare();
+    else if (params.get('autorun') === 'worker') await workerRun();
   } catch (err) { recordError('读取本地样本', err); }
 }
 </script>

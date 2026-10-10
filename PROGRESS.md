@@ -1,10 +1,10 @@
 # PROGRESS
-- 状态：暂停（等待在 Claude.ai 讨论架构）
-- 当前阶段：阶段 0 — 模型可行性验证（收尾：iPhone 内存不足，每次最多处理 2 张；暂停，回 Claude.ai 讨论）
-- 累计用时：4.5
+- 状态：进行中
+- 当前阶段：阶段 0 — 模型可行性验证（收尾：Web Worker + 每 N 张重启已实现，等 iPhone 验收）
+- 累计用时：5
 - 线上地址：https://vincennes-wang.github.io/closet/spike/
 
-## 最近一次工作（2026-10-10）
+## 最近一次工作（2026-10-11）
 - 完成：
   - 仓库初始化（CLAUDE.md、PROGRESS.md、.gitignore）。样本文件夹 `private:samples` 改名为 `private/samples`（原名不会被 `.gitignore` 忽略）。
   - `spike/index.html`：选图 → 抠图（BiRefNet_lite / MODNet / RMBG-1.4）→ fashionSigLIP 零样本分类（品类 / 袖长 / 厚度 top-3）→ 指标面板 → 复制结果 JSON。
@@ -45,6 +45,22 @@
     - 判断：iPhone 上的崩溃与同时驻留的模型总量有关（88 MB 单独可以，54 MB 单独可以，88+186 MB 不行）。具体内存上限未测。
   - **iPhone 第三次实测（iOS 27）**：RMBG fp16 + SigLIP q4f16 同时加载成功（共 142 MB）。第 1 张完整跑完（抠图 1693 ms，分类 204 ms，"背心 97%"正确），第 2 张开始处理（"处理 2/3"，分类前）时页面刷新。说明问题不只是权重总量，还和每张图处理时的内存峰值或逐张累积有关。原因未确认：RMBG 单独在 iPhone 上只测过 1 张，单独连跑多张是否也会崩还不知道。
     - spike 新增"串行"选项：先抠完全部图并释放 RMBG，再加载 SigLIP 分类；抠图结果暂存为 JPEG Blob；每张处理完把 canvas 宽度设为 0（iOS 要显式释放 canvas 内存）。Mac Chrome 验证：步骤顺序正确（抠完 → 释放 rmbg → 加载 siglip → 分类）；5 张样本串行与非串行 top-1 完全一致（5/5）。
+  - **方案 a：Web Worker + 每 N 张重启**（2026-10-11，限时 1.5 小时）：
+    - 诊断（Mac Safari，主线程旧做法，只抠图 5 张，按阶段读标签页进程内存）：**已确认两者都有**。加载 RMBG 后固定在约 1.0 GB（不加载模型时 60–175 MB）；之后逐张上涨 1.04 → 1.05 → 1.21 → 1.31 → 1.34 GB，第 3 张解码时峰值 1.58 GB。
+    - 旧代码的释放情况（审查结论）：
+
+| 对象 | 旧做法（主线程） | 新做法（Worker） |
+|---|---|---|
+| 输入 / 输出张量 | 从未 `dispose()` | 每张处理完全部 `dispose()` |
+| ImageBitmap | `fileToCanvas` 里 `close()` | 主线程转移给 Worker，Worker 画完即 `close()` |
+| object URL | 没用（用 dataURL，DOM 里一直保留） | 显示用 object URL，图片加载完立即 revoke |
+| 临时 canvas | 上一轮起 `width = 0`（只在 C 区运行流程里） | OffscreenCanvas 用完 `width = 0` |
+| 全尺寸原图解码 | 主线程 `createImageBitmap` 全尺寸解码（24 MP 约 98 MB） | 先用 `<img>` 的 onload 读尺寸（不触发全图解码），再让 `createImageBitmap` 直接输出长边 1024 的位图 |
+
+    - 前提核实（Mac Safari）：`createImageBitmap` 的缩放选项可用（4284×5712 → 768×1024）；位图转移后主线程那份变 0×0；Worker 里有 WebGPU 适配器和 OffscreenCanvas。
+    - 新增 `spike/rmbg-worker.js`：模型只在 Worker 里加载（RMBG 或 SigLIP 图像模型，从不同时驻留）。主线程负责缩图，抠完全部图后才开始分类；每 N 张执行 `dispose` → `terminate` → 新建 Worker。页面「D. Worker 模式」区可调 N（默认 2），记录每张耗时和每次重启耗时（JSON `workerRuns`）。
+    - Mac Chrome：10 张，N=2 / 3 / 5 均无错误。抠图约 240 ms/张；重启耗时：抠图约 0.6 s，分类约 0.42 s。Worker 与主线程串行做法的分类 top-1 一致（10/10）。
+    - Mac Safari（N=2，8 张，只抠图）：每批峰值 1.6–1.8 GB（与旧做法前 2 张相当）；`terminate` 后降到 0.65–0.73 GB；全部结束后降到 205 MB。说明重启确实释放了 Worker 占用的内存，但 terminate 后仍残留约 0.7 GB，第二批起点比第一批高。iPhone 上 N=2 能否稳定，需真机验证。
   - **iPhone 第四次实测（iOS 27，每项都新开标签页，3 张图，SigLIP q4f16）**：
     - 只抠图（RMBG fp16）：第 1、2 张成功（1.8 s/张），第 3 张崩溃。
     - 只分类：3/3 成功，213 ms/张（不含首张），结果正确。
@@ -78,8 +94,8 @@
   - Safari：未测（safaridriver 未开启）。iPhone：第一轮一次都没跑通（用户反馈，无 JSON）；第二轮 RMBG 跑通，见上。
 
 ## 下次从这里继续
-1. 在 Claude.ai 讨论架构（用户 2026-10-11 决定先暂停）。候选：(a) 推荐把模型放进 Web Worker，每处理 N 张（例如 2 张）就结束 Worker 再新建一个。结束 Worker 会立刻释放它的全部内存（WASM 堆、WebGPU 缓冲），不依赖垃圾回收；代价是每批重新加载模型，iPhone 从缓存加载 RMBG 约 0.8–1.3 s，实现约 1 小时。(b) 接受每次最多 2 张。(c) 换更小的抠图模型或降低抠图分辨率（需重新找模型）。
-2. 选 (a) 的话：在 spike 里实现后，iPhone 用普通模式（非无痕）测 10 张：串行 + Worker 每 2 张重启。
+1. 看 iPhone 验收结果（D 区 Worker 模式）：N=2 跑 10 张是否不崩；再试 N=3、5；分类 q4f16 和 fp16 各跑 10 张。
+2. 达标 → 写阶段 0 总结，CLAUDE.md 补"模型一律在 Worker 中运行、按 N 张重启"，下一步改为阶段 1（应用骨架 + 手动录入，不含 AI）。不达标 → 按限时规则停下。
 3. 用 20 张样本人工标注品类 / 袖长 / 厚度，算 fashionSigLIP 准确率（袖长只对上装计分）。
 
 ## 未解决问题
