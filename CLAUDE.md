@@ -49,20 +49,24 @@
 - 用途：给家人用的衣橱 + 搭配网页。
 - 平台：PWA，托管在 GitHub Pages。无构建步骤，无后端。第三方库只用 CDN 引入，并固定版本号。
 - 个人数据（衣物照片、搭配）只存在用户浏览器的 IndexedDB 中，绝不进仓库。
-- AI 在浏览器内运行：Transformers.js + WebGPU，WebGPU 不可用时用 WASM 兜底。iOS 系统抠图（长按"拷贝主体"）作为保底方案。
+- 抠图主方案：iOS 系统抠图（"文件"App 多选后批量"移除背景"，或在照片里长按"拷贝主体"）。应用接收透明 PNG（文件导入或粘贴）。
+- 浏览器内抠图模型：阶段 6 再评估，只服务安卓。候选：`studioludens/birefnet-lite-512`（MIT，同类 `onnx-community/BiRefNet_512x512-ONNX` 也是 MIT）、`Xenova/slimsam-77-uniform`（SlimSAM，Apache-2.0，需要点选提示，不是全自动）。
+- RMBG-1.4 只能用于对照，不进正式应用。
+- 分类在浏览器内运行：Transformers.js + WebGPU，WASM 兜底。手机端只加载 fashionSigLIP 图像模型；标签文字向量在 Mac 上预先算好，存为 `spike/label-embeddings.json`（不是个人数据，可以提交）。
 - 模型许可证必须允许商用（MIT / Apache-2.0）。非商用模型只能用于对照测试。
 
 ## 已核实的模型（2026-10-10，查 Hugging Face API）
 | 用途 | 仓库 | 许可证 | 备注 |
 |---|---|---|---|
 | 运行库 | `@huggingface/transformers@4.3.1`（jsDelivr `dist/transformers.min.js`） | Apache-2.0 | 浏览器缓存默认开启（Cache API `transformers-cache`）。不要用 `transformers.web.min.js`：它含裸模块名 `onnxruntime-web/webgpu`，浏览器无法解析 |
-| 抠图（主选） | `onnx-community/BiRefNet_lite-ONNX` | MIT | fp16 114.5 MB / fp32 224 MB。模型卡示例里的 `onnx-community/BiRefNet_lite` 不存在。**Mac Chrome 上跑不通**：WebGPU 超出 storage buffer 上限（需 11，上限 10），WASM 内存不足；输入固定 1024² |
+| 抠图（已放弃） | `onnx-community/BiRefNet_lite-ONNX` | MIT | fp16 114.5 MB / fp32 224 MB。模型卡示例里的 `onnx-community/BiRefNet_lite` 不存在。**Mac Chrome 上跑不通**：WebGPU 超出 storage buffer 上限（需 11，上限 10），WASM 内存不足；输入固定 1024² |
 | 抠图（对照） | `Xenova/modnet` | Apache-2.0 | fp16 13 MB / uint8 6.6 MB。人像抠图模型，衣物平铺图大量破洞，不可用 |
 | 抠图（仅对照） | `briaai/RMBG-1.4` | Bria 非商用 | 效果最好，但不得用于正式应用 |
-| 分类 | `Marqo/marqo-fashionSigLIP` | Apache-2.0 | `SiglipTextModel` + `SiglipVisionModel`；vision fp16 186 MB，text fp16 221 MB |
+| 分类 | `Marqo/marqo-fashionSigLIP` | Apache-2.0 | `SiglipTextModel` + `SiglipVisionModel`；vision fp16 186 MB / q4f16 54 MB / int8 94 MB，text fp16 221 MB |
+| 标签向量 | `spike/label-embeddings.json` | – | 用 fashionSigLIP fp32 文本模型在 Mac 上生成（spike 页面 `?mode=embed`）。改了 `GROUPS` 里的英文 prompt 后必须重新生成 |
 
 ## 目录
-- `spike/`：阶段 0 验证页（单文件 HTML）。
+- `spike/`：阶段 0 验证页（`index.html` 单文件）和预计算的标签向量 `label-embeddings.json`。
 - `private/`：本地测试照片等，不提交（`private/samples/` 放样本照片）。
 
 ## 禁止事项

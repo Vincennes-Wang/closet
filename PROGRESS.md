@@ -34,6 +34,6 @@
 3. 用 RMBG 抠图结果给 20 张样本人工标注品类 / 袖长 / 厚度，算 fashionSigLIP 准确率。
 
 ## 未解决问题
-- 没有可商用、在浏览器跑得通、效果合格的抠图模型（BiRefNet_lite 跑不通，MODNet 效果差，RMBG-1.4 非商用）。
-- 同一页面内 BiRefNet 从 WebGPU 回退到 WASM 后，报错仍是 WebGPU 着色器错误（新页面直接用 WASM 报的是内存不足）。原因未确认；确认方法：在新页面先加载 WebGPU 版再加载 WASM 版，打印两个 session 的 executionProviders。
+- ~~没有可商用、在浏览器跑得通、效果合格的抠图模型~~ — 已决策（2026-10-10）：iOS 用系统抠图；浏览器内抠图推到阶段 6，只服务安卓。
+- ~~同一页面内 BiRefNet 从 WebGPU 回退到 WASM 后仍报 WebGPU 错误~~ — **已放弃**（2026-10-10）：BiRefNet_lite 不再使用，不排查。
 - SigLIP fp16 共 407 MB，iPhone 上可能内存不足；页面可切 q4f16（54 + 109 MB）对照。
