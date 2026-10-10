@@ -1,0 +1,28 @@
+# 模板默认项
+legacy/
+private/
+.env
+.env.*
+*.key
+*.pem
+
+# 模型文件
+*.onnx
+*.onnx_data
+*.safetensors
+*.gguf
+*.bin
+
+# 照片（大小写都忽略）
+*.[jJ][pP][gG]
+*.[jJ][pP][eE][gG]
+*.[pP][nN][gG]
+*.[hH][eE][iI][cC]
+*.[wW][eE][bB][pP]
+
+# 系统文件
+.DS_Store
+
+# 例外：spike 页面需要的图标
+!spike/icons/
+!spike/icons/**
