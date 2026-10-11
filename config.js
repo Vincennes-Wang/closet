@@ -10,8 +10,9 @@ export const MATTING_MODEL = {
 // 分类模型：手机端只加载图像模型（q4f16，54 MB）；标签文字向量在 Mac 上预先算好（label-embeddings.json）
 export const CLASSIFY_MODEL = { id: 'Marqo/marqo-fashionSigLIP', dtype: 'q4f16', wasmDtype: 'int8' };
 
-// 每次页面加载最多分类几张。阶段 0 iPhone 实测分类约 210 ms/张、3/3 稳定；按 2b 真机结果调整
-export const CLASSIFY_PER_LOAD = 10;
+// 每次页面加载最多分类几张。2026-10-11 由 10 改为 6：iPhone 两次在"分类 10 张的页面"之后的下一页崩溃。
+// 12 张仍是两页（6 + 6），每页负担小一些
+export const CLASSIFY_PER_LOAD = 6;
 
 // 每次页面加载最多抠几张，之后自动刷新页面释放内存。iPhone 只抠图时第 3 张崩溃（阶段 0 第四次实测）。
 // 2026-10-11 由 2 改为 1：2b 验收时每页第 2 张处理中崩溃过（用户选择试 1 张）

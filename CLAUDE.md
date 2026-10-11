@@ -105,7 +105,7 @@
 
 ### 阶段 2a 实现（2026-10-11）
 - 配置只在 `config.js`：`MATTING_MODEL`、`MATTING_PER_LOAD`（每次加载抠几张，2026-10-11 由 2 改为 1，见 PROGRESS.md）、`MAX_ATTEMPTS`（同一张失败几次标为失败，默认 2）。
-- `queue.js`：任务分两段（2b 起）：`phase = matting` 抠图，全部抠完刷新一次，`phase = classify` 分类（每次加载最多 `CLASSIFY_PER_LOAD` = 10 张）。两段的差别都在 `PHASES` 里；等待、续传、崩溃恢复、时间线两段共用。队列记录的分类状态在 `classify` 字段（status、attempts、top3）。任务状态存 `meta.job`。页面加载时：`processing` 记录 = 上次崩溃，attempts+1；加载模型时连续崩溃 2 次自动暂停，防止无限刷新。
+- `queue.js`：任务分两段（2b 起）：`phase = matting` 抠图，全部抠完刷新一次，`phase = classify` 分类（每次加载最多 `CLASSIFY_PER_LOAD` 张，2026-10-11 由 10 改为 6）。两段的差别都在 `PHASES` 里；等待、续传、崩溃恢复、时间线两段共用。队列记录的分类状态在 `classify` 字段（status、attempts、top3）。任务状态存 `meta.job`。页面加载时：`processing` 记录 = 上次崩溃，attempts+1；加载模型时连续崩溃 2 次自动暂停，防止无限刷新。
 - `model-worker.js`：抠图 Worker（复制自 `spike/rmbg-worker.js`）。URL 加 `?fakeMatting=毫秒` 时不加载模型，测试用。
 - 全部抠完后再刷新一次，等 `RESULTS_DELAY_MS`（2 秒）再显示结果（iPhone 两次验收都在显示 12 张结果图时崩溃）。
 - 队列只显示缩略图（记录字段 `thumb`，长边 `THUMB_SIDE` = 256），"录入"时才用原尺寸。每批结束先 `dispose` 模型再结束 Worker、刷新。
