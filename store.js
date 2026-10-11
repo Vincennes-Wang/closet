@@ -155,9 +155,11 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
 
     // ---------- 任务状态 ----------
     getJob: async () => (await tx('readonly', (os) => req(os.get('job')), META)) ?? null,
+    // patch 可以是对象，也可以是 (当前 job) => 对象（读改写在同一个事务里，例如追加事件）
     async setJob(patch) {
       return tx('readwrite', async (os) => {
-        const next = { ...((await req(os.get('job'))) ?? {}), ...patch };
+        const current = (await req(os.get('job'))) ?? {};
+        const next = { ...current, ...(typeof patch === 'function' ? patch(current) : patch) };
         os.put(next, 'job');
         return next;
       }, META);

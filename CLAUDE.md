@@ -107,6 +107,9 @@
 - 配置只在 `config.js`：`MATTING_MODEL`、`MATTING_PER_LOAD`（每次加载抠几张，默认 2）、`MAX_ATTEMPTS`（同一张失败几次标为失败，默认 2）。
 - `queue.js`：任务状态存 `meta.job`。页面加载时：`processing` 记录 = 上次崩溃，attempts+1；加载模型时连续崩溃 2 次自动暂停，防止无限刷新。
 - `model-worker.js`：抠图 Worker（复制自 `spike/rmbg-worker.js`）。URL 加 `?fakeMatting=毫秒` 时不加载模型，测试用。
+- 全部抠完后再刷新一次，在干净页面显示结果图（iPhone 第 1 次验收时，在跑过模型的页面上显示 12 张结果图时崩溃）。
+- 事件时间线存 `job.events`，界面"详细记录"可展开，用来确认崩在哪一步。时间线文字在 `queue.js` `EVENT_TEXT`。
+- 发布后第一次打开，Service Worker 先给旧文件、后台更新，第二次打开才是新版（Safari 实测）。验收前先打开一次、完全关掉再开。
 - 选图时透明图直接算"已抠图"。取消后剩下的标为"未抠图"，保留原图。处理完的照片暂时在队列区点"录入"，用原来的录入表单；2b 换成待确认列表。
 
 ### 配色（2026-10-11）

@@ -1,7 +1,7 @@
 import { CATEGORIES, SEASONS, SCENES } from './options.js';
 import { openStore, groupByCategory } from './store.js';
 import { prepareImage, probeWebpAlpha } from './image.js';
-import { startJob, pauseJob, continueJob, cancelJob, summarize, resumeQueue } from './queue.js';
+import { startJob, pauseJob, continueJob, cancelJob, summarize, resumeQueue, eventLines, noteResultsLoad, noteResultsShown } from './queue.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...children) => {
@@ -165,6 +165,11 @@ const STATUS_TEXT = { pending: '待抠图', processing: '抠图中', cutout_done
 const duration = (ms) => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)} 分 ${s % 60} 秒`; };
 const progressText = (p) => `已处理 ${p.processed} / ${p.total}（失败 ${p.failed}）· 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}`;
 
+// 可展开的事件时间线（诊断用）
+const timeline = (job) => (job?.events?.length
+  ? el('details', { className: 'timeline' }, el('summary', { textContent: '详细记录' }), el('pre', { textContent: eventLines(job).join('\n') }))
+  : '');
+
 function queueButton(label, fn, cls = '') {
   return el('button', { type: 'button', className: cls, textContent: label, onclick: fn });
 }
@@ -184,6 +189,7 @@ async function renderQueue() {
       el('p', { id: 'progress', textContent: progressText(p) }),
       job.paused ? '' : el('p', { className: 'hint', textContent: '处理中请保持页面在前台，屏幕不要锁定。页面会自动刷新，不用操作。' }),
       el('p', { className: 'error', textContent: job.error ?? '' }),
+      job.paused ? timeline(job) : '',
       el('div', { className: 'actions' },
         job.paused
           ? queueButton('继续', async () => { await continueJob(store); location.reload(); }, 'primary')
@@ -196,6 +202,7 @@ async function renderQueue() {
   box.replaceChildren(...(queue.length ? [el('section', { className: 'card' },
     el('h2', { textContent: `待录入 · ${queue.length}` }),
     p ? el('p', { className: 'muted', id: 'lastJob', textContent: `上次抠图：成功 ${p.done}，失败 ${p.failed}，取消 ${p.skipped} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}${p.backend ? ` · ${p.backend}` : ''}` }) : '',
+    p ? timeline(job) : '',
     waiting ? el('div', { className: 'actions' },
       queueButton(`开始抠图（${waiting} 张）`, async () => { await startJob(store); location.reload(); }, 'primary')) : '',
     el('div', { className: 'grid' }, ...queue.map(queueTile)))] : []));
@@ -258,9 +265,15 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 
 // 抠图任务进行中时不渲染衣橱，少占内存
 const job = await store.getJob();
+if (job && !job.running) await noteResultsLoad(store);
 if (!job?.running) await render();
 else $('storage').textContent = '正在抠图';
 await renderQueue();
+if (!job?.running) {
+  // 结果图都解码完，记一笔"结果已显示"（只在抠完后的那次刷新记）
+  Promise.all([...document.querySelectorAll('#queue img')].map((i) => i.decode().catch(() => {})))
+    .then(() => noteResultsShown(store));
+}
 document.documentElement.dataset.ready = '1'; // 事件已绑定、衣橱已渲染（测试等这个标记）
 showDiag();
 if (job?.running) {

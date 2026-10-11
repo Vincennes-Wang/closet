@@ -221,6 +221,17 @@ test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重�
   assert.equal(st.job.running, false);
   assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /成功 4，失败 1，取消 0 · 自动刷新 1 次 · 崩溃恢复 2 次/);
   assert.equal(await chrome.evaluate(statuses), '抠图失败，用原图,已抠图,已抠图,已抠图,已抠图');
+  // 时间线：两次崩溃都记在第 1 张；抠完后刷新到新页面再显示结果
+  await chrome.waitFor(`(${QUEUE_STATE}).then((s) => s.job.events.at(-1).e === 'resultsShown')`);
+  st = await chrome.evaluate(QUEUE_STATE);
+  const ev = st.job.events;
+  assert.deepEqual(ev.filter((v) => v.e === 'crash').map((v) => [v.i, v.attempts]), [[1, 1], [1, 2]]);
+  assert.deepEqual(ev.filter((v) => v.e === 'load').map((v) => v.unexpected), [false, true, true, false]);
+  assert.deepEqual(ev.filter((v) => v.e === 'done').map((v) => v.i), [2, 3, 4, 5]);
+  assert.deepEqual(ev.slice(-3).map((v) => v.e), ['finishReload', 'resultsLoad', 'resultsShown']);
+  const lines = await chrome.evaluate(`document.querySelector('#queue .timeline pre').textContent`);
+  assert.match(lines, /发现第 1 张处理时页面崩溃（第 2 次）/);
+  assert.match(lines, /全部完成，刷新后显示结果/);
 });
 
 test('抠图队列：暂停后不再刷新，继续后做完；取消后剩下的标为未抠图', async () => {
