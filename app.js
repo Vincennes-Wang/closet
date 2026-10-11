@@ -119,6 +119,7 @@ async function render() {
   for (const u of urls) URL.revokeObjectURL(u);
   urls.clear();
   const all = await store.list({ includeArchived: true });
+  showStorage(all);
   const active = all.filter((i) => !i.archived);
   renderGroups($('closet'), active);
   $('empty').hidden = active.length > 0;
@@ -156,27 +157,29 @@ function openEdit(item) {
 }
 
 // ---------- 存储状态、诊断 ----------
-async function showStorage() {
-  const parts = [];
-  if (navigator.storage?.persist) {
-    const granted = (await navigator.storage.persisted()) || (await navigator.storage.persist());
-    parts.push(`持久化：${granted ? '已授予' : '未授予'}`);
-  } else parts.push('持久化：不支持');
-  if (navigator.storage?.estimate) {
-    const { usage } = await navigator.storage.estimate();
-    parts.push(`已用 ${(usage / 1024 / 1024).toFixed(1)} MB`);
-  }
-  $('storage').textContent = parts.join(' · ');
+// 申请"空间不足时不自动清除"（persist），只在启动时做一次
+const persisted = (async () => {
+  if (!navigator.storage?.persist) return null;
+  return (await navigator.storage.persisted()) || (await navigator.storage.persist());
+})();
+
+// 照片占用自己加总：Safari 的 storage.estimate() 不计 IndexedDB 里的图片（Mac Safari 实测存 1.27 MB 只多报约 3 KB）
+async function showStorage(items) {
+  const mb = (items.reduce((n, i) => n + i.image.size, 0) / 1024 / 1024).toFixed(1);
+  const kept = await persisted;
+  $('storage').textContent = kept
+    ? `数据不会被自动清除 · 照片占用 ${mb} MB`
+    : `空间不足时浏览器可能清除数据，请定期备份 · 照片占用 ${mb} MB`;
 }
 
+// 测试辅助，交付前视情况删除
 async function showDiag() {
   const w = await probeWebpAlpha();
-  $('diag').textContent = `透明图保存格式：${w.ok ? 'WebP' : 'PNG'}（toBlob('image/webp') 输出 ${w.outputType ?? '空'}，透明${w.alphaKept ? '保留' : '未保留'}）`;
+  $('diag').textContent = w.ok ? '透明图保存为 WebP' : '透明图保存为 PNG（这台设备的浏览器不能保存带透明的 WebP）';
 }
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Service Worker 注册失败', err));
 
 await render();
 document.documentElement.dataset.ready = '1'; // 事件已绑定、衣橱已渲染（测试等这个标记）
-showStorage();
 showDiag();

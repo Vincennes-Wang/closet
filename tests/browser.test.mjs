@@ -132,8 +132,16 @@ test('应用：录入 2 件（透明 PNG、无透明 JPEG），刷新后仍在�
   await chrome.waitFor(`document.querySelectorAll('#archived .tile').length === 1`);
 
   // 存储状态和 WebP 检测已显示
-  assert.match(await chrome.evaluate(`document.getElementById('storage').textContent`), /持久化：(已授予|未授予)/);
-  assert.match(await chrome.evaluate(`document.getElementById('diag').textContent`), /透明图保存格式：WebP/);
+  // 照片占用按衣物图片大小加总（不用 storage.estimate()）
+  const storage = await chrome.evaluate(`document.getElementById('storage').textContent`);
+  assert.match(storage, /^(数据不会被自动清除|空间不足时浏览器可能清除数据，请定期备份) · 照片占用 \d+\.\d MB$/);
+  const expectedMb = await chrome.evaluate(`(async () => {
+    const { openStore } = await import('/store.js'); const s = await openStore();
+    const all = await s.list({ includeArchived: true }); s.close();
+    return (all.reduce((n, i) => n + i.image.size, 0) / 1024 / 1024).toFixed(1);
+  })()`);
+  assert.ok(storage.endsWith(`照片占用 ${expectedMb} MB`), storage);
+  assert.equal(await chrome.evaluate(`document.getElementById('diag').textContent`), '透明图保存为 WebP');
 
   // 离线：Service Worker 接管后断网刷新，页面仍能显示衣橱
   await chrome.waitFor(`navigator.serviceWorker.controller !== null`);
