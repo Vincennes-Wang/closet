@@ -91,14 +91,18 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
 
   const copyBlob = async (b) => (b ? new Blob([await b.arrayBuffer()], { type: b.type }) : b);
 
-  // 改一条队列记录。和 update() 一样先在事务外复制 Blob（Safari 坑）
-  async function patchQueued(id, fn) {
+  // 改一条队列记录。和 update() 一样先在事务外复制 Blob（Safari 坑）。
+  // onlyIf：写入事务里对最新记录再判断一次，不满足就不写（复制 Blob 期间记录可能已被别的页面改了）
+  async function patchQueued(id, fn, onlyIf = null) {
     const current = await tx('readonly', (os) => req(os.get(id)), QUEUE);
     if (!current) throw new Error(`找不到队列记录 ${id}`);
     const next = fn({ ...current, original: await copyBlob(current.original),
       cutout: await copyBlob(current.cutout), thumb: await copyBlob(current.thumb) });
-    await tx('readwrite', (os) => req(os.put(next)), QUEUE);
-    return next;
+    return tx('readwrite', async (os) => {
+      if (onlyIf && !onlyIf(await req(os.get(id)) ?? {})) return null;
+      os.put(next);
+      return next;
+    }, QUEUE);
   }
 
   // 多条记录只改状态（取消时用）
@@ -147,8 +151,9 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
     getQueued: (id) => tx('readonly', (os) => req(os.get(id)), QUEUE),
     markProcessing: (id) => patchQueued(id, (r) => ({ ...r, status: 'processing' })),
     // 只在记录仍是 processing 时保存：已被取消、或已被新页面判为崩溃的，不覆盖
-    saveCutout: (id, cutout, ms, thumb = null) => patchQueued(id, (r) => (r.status !== 'processing' ? r
-      : { ...r, cutout, thumb: thumb ?? r.thumb, status: 'cutout_done', error: '', ms })),
+    saveCutout: (id, cutout, ms, thumb = null) => patchQueued(id,
+      (r) => ({ ...r, cutout, thumb: thumb ?? r.thumb, status: 'cutout_done', error: '', ms }),
+      (latest) => latest.status === 'processing'),
     // 失败一次（崩溃或报错）：次数到上限标失败、保留原图，否则回到待处理
     failAttempt: (id, error, maxAttempts) => patchQueued(id, (r) => {
       const attempts = r.attempts + 1;
