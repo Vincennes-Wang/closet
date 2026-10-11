@@ -1,11 +1,13 @@
-// 抠图 Worker：模型只在这里加载（做法来自 spike/rmbg-worker.js）。页面每批处理完就刷新，Worker 随页面销毁。
-// 消息：init（加载模型）/ run（抠一张，ImageBitmap 以 transfer 方式传入，返回透明 PNG）/ dispose（释放 ONNX session）
-// 测试用：init 时 fake 为数字，则不加载模型，每张等待 fake 毫秒后把左上角挖空当作抠图结果
+// 模型 Worker：模型只在这里加载（做法来自 spike/rmbg-worker.js）。页面每批处理完就刷新，Worker 随页面销毁。
+// 一个 Worker 只做一种任务（task）：matting = 抠图（RMBG），classify = 分类（fashionSigLIP 图像模型）。
+// 消息：init（加载模型）/ run（处理一张，ImageBitmap 以 transfer 方式传入）/ dispose（释放 ONNX session）
+// 测试用：init 时 fake 为数字，则不加载模型，每张等待 fake 毫秒后返回假结果
 const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
-let model = null, processor = null, spec = null, RawImage = null, fake = null;
+let task = null, model = null, processor = null, spec = null, RawImage = null, fake = null, labels = null;
 
-async function init({ modelId, dtype, wasmDtype, input, output, config, fake: f }) {
-  spec = { input, output };
+// labels：分类用的预计算标签向量 [{ id, embedding }]（label-embeddings.json）
+async function init({ task: initTask = 'matting', modelId, dtype, wasmDtype, input, output, config, labels: l, fake: f }) {
+  task = initTask; spec = { input, output }; labels = l ?? null;
   if (typeof f === 'number') { fake = f; return { device: 'fake', dtype: 'fake', loadMs: 0 }; }
   const t = await import(TRANSFORMERS);
   t.env.allowLocalModels = false;
@@ -15,7 +17,8 @@ async function init({ modelId, dtype, wasmDtype, input, output, config, fake: f 
   try { if (await navigator.gpu?.requestAdapter()) device = 'webgpu'; } catch { /* 无 */ }
   const realDtype = device === 'webgpu' ? dtype : wasmDtype;
   const t0 = performance.now();
-  model = await t.AutoModel.from_pretrained(modelId, { device, dtype: realDtype, ...(config ? { config } : {}) });
+  const opts = { device, dtype: realDtype, ...(config ? { config } : {}) };
+  model = task === 'classify' ? await t.SiglipVisionModel.from_pretrained(modelId, opts) : await t.AutoModel.from_pretrained(modelId, opts);
   processor = await t.AutoProcessor.from_pretrained(modelId);
   return { device, dtype: realDtype, loadMs: Math.round(performance.now() - t0) };
 }
@@ -76,11 +79,50 @@ async function runMatting(bitmap, thumbSide) {
   }
 }
 
+// 打分沿用 Marqo 模型卡和 spike：softmax(100 × 余弦相似度)，返回全部打分项，按分数从高到低
+function rank(vec) {
+  const logits = labels.map((l) => 100 * l.embedding.reduce((acc, v, i) => acc + v * vec[i], 0));
+  const max = Math.max(...logits);
+  const exps = logits.map((x) => Math.exp(x - max));
+  const sum = exps.reduce((a, b) => a + b, 0);
+  return labels.map((l, i) => ({ id: l.id, score: +(exps[i] / sum).toFixed(4) })).sort((a, b) => b.score - a.score);
+}
+
+// 分类：先合成到白底（抠图结果是透明的，模型要看到白底上的衣物；原图不受影响）
+async function runClassify(bitmap) {
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const t0 = performance.now();
+  const temps = [];
+  try {
+    if (fake !== null) {
+      await new Promise((ok) => setTimeout(ok, fake));
+      // 假结果：按标签顺序，第一项分数最高
+      return { ranked: labels.map((l, i) => ({ id: l.id, score: +(0.5 / (i + 1)).toFixed(4) })), ms: Math.round(performance.now() - t0) };
+    }
+    const inputs = await processor(RawImage.fromCanvas(canvas).rgb());
+    temps.push(...Object.values(inputs));
+    const out = await model(inputs);
+    temps.push(...Object.values(out));
+    const normed = out.image_embeds.normalize(); temps.push(normed);
+    return { ranked: rank(normed.tolist()[0]), ms: Math.round(performance.now() - t0) };
+  } finally {
+    for (const t of temps) { try { t.dispose(); } catch { /* 已释放 */ } }
+    canvas.width = 0;
+  }
+}
+
 self.onmessage = async ({ data }) => {
   const { id, type } = data;
   try {
     if (type === 'init') self.postMessage({ id, ok: true, ...(await init(data)) });
-    else if (type === 'run') self.postMessage({ id, ok: true, ...(await runMatting(data.bitmap, data.thumbSide)) });
+    else if (type === 'run') {
+      const r = task === 'classify' ? await runClassify(data.bitmap) : await runMatting(data.bitmap, data.thumbSide);
+      self.postMessage({ id, ok: true, ...r });
+    }
     else if (type === 'dispose') {
       await model?.dispose();
       model = null; processor = null;

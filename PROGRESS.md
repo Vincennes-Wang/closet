@@ -1,7 +1,7 @@
 # PROGRESS
 - 状态：进行中
-- 当前阶段：2a 已验收；下一步 2b 二级分类 + 待确认列表
-- 累计用时：14
+- 当前阶段：2b 二级分类 + 待确认列表（第 1–2 步完成；下一步第 3 步数据库 v3 + 分类队列）
+- 累计用时：16
 - 线上地址：https://vincennes-wang.github.io/closet/（应用）、https://vincennes-wang.github.io/closet/spike/（阶段 0 验证页）
 
 ## 阶段 0 总结（2026-10-11 结束）
@@ -13,6 +13,16 @@
   - 分类模型用 fashionSigLIP q4f16，只加载图像模型，在 Worker 中运行（阶段 2b 接入）。
   - iOS 系统抠图：2026-10-11 先否决，同日更正为可行的备选（照片长按 → 共享 → 保存图像）。
 - 详细测试记录见文末"阶段 0 详细记录"。
+
+## 最近一次工作（2026-10-11，2b 第 1–2 步）
+- 完成：
+  - 第 1 步：`taxonomy.js`（分类唯一来源：9 个一级、25 个二级，含"外搭"；中文名、英文 prompt、默认季节、`builtin`）。29 个打分项 = 25 个二级 + 4 个没有二级的一级（套装、箱包、配饰、帽子）。这 4 个的默认季节用户没给，暂定四季。`visibleTaxonomy()`（内置 + 自建 − 隐藏、改名）已写好，界面留到阶段 4。
+  - `tools/embed.mjs`：headless Chrome 用 fashionSigLIP fp32 文本模型生成根目录 `label-embeddings.json`（29 项，189 KB）。`tests/taxonomy.test.mjs` 检查它和 `taxonomy.js` 一致，改了 prompt 忘了重新生成会失败。
+  - 第 2 步：`model-worker.js` 加分类任务（白底合成 → SigLIP 图像向量 → softmax(100×余弦) 排序）。`tools/eval.mjs`：20 张样本跑"抠图 → 分类"，读 `private/labels.json` 算 top-1 / top-3、混淆、外搭相关混淆。已生成标注模板和 `private/分类id对照.txt`（都不提交）。
+- 验证结果：
+  - `node --test tests/*.test.mjs` 17/17 通过。
+  - `node tools/eval.mjs`（Mac Chrome，webgpu/q4f16）：20 张都跑通。预测主观合理（衬衫、背心、毛衣、连衣裙、运动服、西裤）。准确率要等用户标注。
+  - 低置信度：IMG_4027（背心 35% / 短袖 24% / 短裤 20%）、IMG_4034（夹克 41% / 风衣 22% / 衬衫 17%）。
 
 ## 阶段 2a 验收通过（2026-10-11，iPhone 第 4 次，提交 e6b45c9）
 - 用户 iPhone（iOS 27，主屏幕图标，普通模式）一次选 12 张，全程不手动操作，全部处理完，没有出现错误。具体数字（自动刷新、崩溃恢复、用时）用户没有提供。
@@ -116,7 +126,9 @@
   - 390×844 截图检查首页和编辑弹窗。
 
 ## 下次从这里继续
-1. 2b：Plan mode 给计划，用户确认后写代码。用户需要按新分类表标注 20 张样本（`private/labels.json`，不提交）。
+1. 用户标注 `private/labels.json` 后运行 `node tools/eval.mjs`，把准确率报告写进这里，决定 prompt 要不要调（调了要 `node tools/embed.mjs`）。
+2. 2b 第 3 步：数据库 v3（清空，用户已确认）、衣物记录改 `categoryId` / `subcategoryId`、队列加分类段（每次加载最多 10 张，沿用 2a 的等待和续传）。计划见 2b 计划（已获确认）。
+3. 2b 第 4 步：待确认列表，替换 2a 的"录入"过渡；衣橱和编辑弹窗改用 taxonomy。
 2. 2a 通过后开始 2b（Plan mode 给计划）。阶段顺序：2a → 2b 二级分类 + 待确认列表 → 3 备份 → 4 衣橱筛选 + 槽位式搭配 → 5 下周穿搭 → 6 交付。
 3. iPhone 看一眼页头文字和照片占用是否合理。
 
