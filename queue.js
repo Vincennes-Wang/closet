@@ -97,6 +97,7 @@ const EVENT_TEXT = {
   error: (v) => (v.i ? `第 ${v.i} 张出错：${v.msg}` : `出错：${v.msg}`),
   crash: (v) => `发现第 ${v.i} 张${v.k === 'classify' ? '分类' : '处理'}时页面崩溃（第 ${v.attempts} 次）`,
   loadCrash: () => '发现加载模型时页面崩溃',
+  crashIdle: () => '发现上个页面在两步之间崩溃',
   reload: () => '自动刷新',
   dispose: (v) => `释放模型 ${v.ms} ms`,
   loadWait: (v) => `等待 ${v.ms} ms 再加载模型`,
@@ -145,7 +146,9 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
   if (!job?.running) return 'idle';
   // 上一条不是"自动刷新"或"开始"，说明上个页面意外结束（崩溃或被关掉）
   const last = job.events?.at(-1)?.e;
-  await log(store, { e: 'load', unexpected: !['start', 'reload', 'continue', 'phase'].includes(last) });
+  const unexpected = !['start', 'reload', 'continue', 'phase'].includes(last);
+  await log(store, { e: 'load', unexpected });
+  let recovered = false; // 下面是否已按"加载中 / 处理中"算过一次崩溃恢复
   const P = PHASES[job.phase ?? 'matting'];
 
   // 上次在加载模型时崩溃（loading 标记没清掉）。连续 MAX_ATTEMPTS 次就暂停，避免无限刷新
@@ -153,6 +156,7 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
     const loadCrashes = (job.loadCrashes ?? 0) + 1;
     job = await store.setJob({ loading: false, loadCrashes, recoveries: job.recoveries + 1 });
     await log(store, { e: 'loadCrash' });
+    recovered = true;
     if (loadCrashes >= MAX_ATTEMPTS) {
       await store.setJob({ paused: true, error: `加载${P.name}模型时页面连续崩溃，已暂停。点"继续"重试。` });
       onChange();
@@ -166,6 +170,12 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
     const attempts = await P.fail(store, r.id, '处理时页面崩溃');
     job = await store.setJob({ recoveries: job.recoveries + 1 });
     await log(store, { e: 'crash', k: P.task, i: indexOf(job, r.id), attempts });
+    recovered = true;
+  }
+  // 意外结束、但既不在加载模型也不在处理某张（例如模型刚就绪、两张之间）：也算一次崩溃恢复
+  if (unexpected && !recovered && last !== 'pause') {
+    job = await store.setJob({ recoveries: job.recoveries + 1 });
+    await log(store, { e: 'crashIdle' });
   }
 
   const pending = () => store.listQueue().then((q) => q.filter((r) => (job.ids ?? []).includes(r.id) && P.todo(r)));

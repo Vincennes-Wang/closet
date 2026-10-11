@@ -90,7 +90,7 @@
 
 ### 阶段 0 结论（2026-10-11）
 - iPhone 上 RMBG-1.4 的内存在整个页面生命周期内累积。终止 Worker 不能释放这部分内存。
-- 阶段 2a 接入 AI 抠图：每批 2 张（2026-10-11 由 3 张改为 2 张：第四次实测只抠图时第 3 张崩溃），结果存 IndexedDB，然后自动刷新页面续传下一批。
+- 阶段 2a 接入 AI 抠图：每批 2 张（2026-10-11 由 3 张改为 2 张：第四次实测只抠图时第 3 张崩溃；2b 验收后再改为 1 张），结果存 IndexedDB，然后自动刷新页面续传下一批。
 - iOS 系统抠图恢复为备选（2026-10-11 更正），见上方"备选方案"。
 - 分类模型：fashionSigLIP q4f16，只加载图像模型，在 Worker 中运行（阶段 2b 接入）。
 
@@ -104,7 +104,7 @@
 - Safari 坑二（2026-10-11 确认，2a）：记录被改写后，改写前读出的 Blob 也读不出来（`createImageBitmap` 报 "An error occured reading the Blob argument"）。改写记录后要用改写后的新 Blob（`queue.js` 用 `markProcessing()` 的返回值）。
 
 ### 阶段 2a 实现（2026-10-11）
-- 配置只在 `config.js`：`MATTING_MODEL`、`MATTING_PER_LOAD`（每次加载抠几张，默认 2）、`MAX_ATTEMPTS`（同一张失败几次标为失败，默认 2）。
+- 配置只在 `config.js`：`MATTING_MODEL`、`MATTING_PER_LOAD`（每次加载抠几张，2026-10-11 由 2 改为 1，见 PROGRESS.md）、`MAX_ATTEMPTS`（同一张失败几次标为失败，默认 2）。
 - `queue.js`：任务分两段（2b 起）：`phase = matting` 抠图，全部抠完刷新一次，`phase = classify` 分类（每次加载最多 `CLASSIFY_PER_LOAD` = 10 张）。两段的差别都在 `PHASES` 里；等待、续传、崩溃恢复、时间线两段共用。队列记录的分类状态在 `classify` 字段（status、attempts、top3）。任务状态存 `meta.job`。页面加载时：`processing` 记录 = 上次崩溃，attempts+1；加载模型时连续崩溃 2 次自动暂停，防止无限刷新。
 - `model-worker.js`：抠图 Worker（复制自 `spike/rmbg-worker.js`）。URL 加 `?fakeMatting=毫秒` 时不加载模型，测试用。
 - 全部抠完后再刷新一次，等 `RESULTS_DELAY_MS`（2 秒）再显示结果（iPhone 两次验收都在显示 12 张结果图时崩溃）。

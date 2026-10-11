@@ -13,8 +13,9 @@ export const CLASSIFY_MODEL = { id: 'Marqo/marqo-fashionSigLIP', dtype: 'q4f16',
 // 每次页面加载最多分类几张。阶段 0 iPhone 实测分类约 210 ms/张、3/3 稳定；按 2b 真机结果调整
 export const CLASSIFY_PER_LOAD = 10;
 
-// 每次页面加载最多抠几张，之后自动刷新页面释放内存。iPhone 只抠图时第 3 张崩溃（阶段 0 第四次实测）
-export const MATTING_PER_LOAD = 2;
+// 每次页面加载最多抠几张，之后自动刷新页面释放内存。iPhone 只抠图时第 3 张崩溃（阶段 0 第四次实测）。
+// 2026-10-11 由 2 改为 1：2b 验收时每页第 2 张处理中崩溃过（用户选择试 1 张）
+export const MATTING_PER_LOAD = 1;
 
 // 队列里显示的缩略图长边（像素）。12 张 1024 px 结果图解码后约 50 MB，iPhone 上显示时崩溃过
 export const THUMB_SIDE = 256;

@@ -221,15 +221,15 @@ test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重�
   await chrome.waitFor(`(${QUEUE_STATE}).then((s) => s.job.recoveries === 1 && s.attempts[0] === 1)`);
   let st;
   await crashWhileProcessing(url); // 第 1 张第 2 次崩溃
-  await chrome.waitFor(`document.getElementById('lastJob')`, 40000);
+  await chrome.waitFor(`document.getElementById('lastJob')`, 60000);
   await chrome.waitFor(`[...document.querySelectorAll('#queue .review-img img')].every((i) => i.naturalWidth)`);
   st = await chrome.evaluate(QUEUE_STATE);
   assert.deepEqual(st.statuses, ['cutout_failed', 'cutout_done', 'cutout_done', 'cutout_done', 'cutout_done']);
   assert.equal(st.attempts[0], 2);
   assert.equal(st.job.recoveries, 2);
-  assert.equal(st.job.reloads, 1); // 崩溃后的加载：第 2、3 张 → 刷新 → 第 4、5 张 → 结束
+  assert.equal(st.job.reloads, 3); // 每次加载 1 张：崩溃后第 2 张 → 刷新 → 第 3 张 → 刷新 → 第 4 张 → 刷新 → 第 5 张 → 进入分类
   assert.equal(st.job.running, false);
-  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /成功 4，失败 1，取消 0 · 自动刷新 1 次 · 崩溃恢复 2 次/);
+  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /成功 4，失败 1，取消 0 · 自动刷新 3 次 · 崩溃恢复 2 次/);
   // 抠图失败的那张：提示用照片 App 抠图，没有"用原图"开关
   assert.match(await chrome.evaluate(`document.querySelector('#queue .review .hint').textContent`), /^抠图失败，将保存原图。也可以用照片 App 抠图/);
   assert.equal(await chrome.evaluate(`document.querySelectorAll('#queue .review .toggle-inline').length`), 4);
@@ -238,18 +238,19 @@ test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重�
   st = await chrome.evaluate(QUEUE_STATE);
   const ev = st.job.events;
   assert.deepEqual(ev.filter((v) => v.e === 'crash').map((v) => [v.i, v.attempts]), [[1, 1], [1, 2]]);
-  // 抠图 4 次加载（2 次崩溃），分类 1 次加载
-  assert.deepEqual(ev.filter((v) => v.e === 'load').map((v) => v.unexpected), [false, true, true, false, false]);
+  // 抠图 6 次加载（2 次崩溃），分类 1 次加载
+  assert.deepEqual(ev.filter((v) => v.e === 'load').map((v) => v.unexpected), [false, true, true, false, false, false, false]);
+  assert.equal(ev.filter((v) => v.e === 'crashIdle').length, 0); // 处理中崩溃不重复计数
   assert.deepEqual(ev.filter((v) => v.e === 'done' && v.k === 'matting').map((v) => v.i), [2, 3, 4, 5]);
   // 抠图失败的第 1 张也用原图分类
   assert.deepEqual(ev.filter((v) => v.e === 'done' && v.k === 'classify').map((v) => v.i), [1, 2, 3, 4, 5]);
   assert.ok(ev.findIndex((v) => v.e === 'phase') < ev.findIndex((v) => v.k === 'classify'));
   assert.deepEqual(ev.slice(-4).map((v) => v.e), ['finishReload', 'resultsLoad', 'wait', 'resultsShown']);
-  // 第一次加载不等；之后 4 次加载（2 次崩溃后、1 次自动刷新后、进入分类后）都先等再加载模型
-  assert.equal(ev.filter((v) => v.e === 'loadWait').length, 4);
+  // 第一次加载不等；之后 6 次加载（2 次崩溃后、3 次自动刷新后、进入分类后）都先等再加载模型
+  assert.equal(ev.filter((v) => v.e === 'loadWait').length, 6);
   assert.equal(ev.findIndex((v) => v.e === 'loadWait') > ev.findIndex((v) => v.e === 'model'), true);
-  // 每批结束都先释放模型再刷新：抠图 4 次加载（2 次中途崩溃没有释放）+ 分类 1 次 → 3 次释放
-  assert.equal(ev.filter((v) => v.e === 'dispose').length, 3);
+  // 每批结束都先释放模型再刷新：抠图 6 次加载（2 次中途崩溃没有释放）+ 分类 1 次 → 5 次释放
+  assert.equal(ev.filter((v) => v.e === 'dispose').length, 5);
   // 队列里显示缩略图（长边 256），不是 1024 的原图
   const sizes = await chrome.evaluate(`[...document.querySelectorAll('#queue .review-img img')].map((i) => Math.max(i.naturalWidth, i.naturalHeight))`);
   assert.deepEqual(sizes, [256, 256, 256, 256, 256]);
@@ -305,4 +306,23 @@ test('store.js：v1 数据库升级到 v2 时清空旧数据，新增队列表',
     return out;
   })()`);
   assert.deepEqual(r, { items: 0, queue: 0, job: null });
+});
+
+test('抠图队列：模型就绪后、开始处理前崩溃，也算一次崩溃恢复', async () => {
+  await openWithQueue(1, 50);
+  // 构造"上个页面刚加载完模型就崩溃"的状态：任务进行中，最后一条事件是模型就绪，没有处理中的照片
+  await chrome.evaluate(`(async () => {
+    const { openStore } = await import('/store.js');
+    const s = await openStore();
+    const ids = (await s.listQueue()).map((r) => r.id);
+    await s.setJob({ phase: 'matting', running: true, paused: false, ids, startedAt: Date.now(), endedAt: null, reloads: 0, recoveries: 0,
+      loading: false, loadCrashes: 0, error: '', events: [{ t: Date.now(), e: 'start', n: 1 }, { t: Date.now(), e: 'load' }, { t: Date.now(), e: 'model', k: 'matting', ms: 1 }] });
+    s.close();
+  })()`);
+  await chrome.goto(`${server.origin}/?fakeMatting=50`);
+  await chrome.waitFor(`document.getElementById('lastJob')`, 20000);
+  const st = await chrome.evaluate(QUEUE_STATE);
+  assert.equal(st.job.recoveries, 1);
+  assert.deepEqual(st.job.events.filter((v) => v.e === 'crashIdle').length, 1);
+  assert.deepEqual(st.statuses, ['cutout_done']);
 });
