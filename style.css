@@ -52,6 +52,17 @@ label.primary { display: block; text-align: center; padding: 14px; font-size: 17
 .toggle { display: block; margin: 24px 0 8px; font-size: 14px; color: var(--muted); }
 .toggle input { accent-color: var(--azul); }
 #archived .tile { opacity: .6; }
+
+/* 抠图队列 */
+#queueMsg:empty { display: none; }
+#queue h2 { margin-top: 0; }
+.queued .actions { margin-top: 2px; gap: 4px; justify-content: center; }
+.queued .actions button { padding: 4px 8px; font-size: 13px; }
+.status { font-size: 12px; color: var(--muted); }
+.status.cutout_failed, .status.skipped { color: var(--danger); }
+/* 抠图进行中只显示进度，不渲染衣橱，少占内存 */
+body.processing #addLabel, body.processing #closet, body.processing #empty,
+body.processing .toggle, body.processing #archived, body.processing #pending { display: none; }
 details { margin-top: 24px; font-size: 14px; }
 summary { cursor: pointer; color: var(--muted); }
 

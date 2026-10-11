@@ -71,18 +71,31 @@ const clickChip = (cardIndex, text) => `(() => {
   [...card.querySelectorAll('.chip')].find((b) => b.textContent === '${text}').click();
 })()`;
 
-test('应用：录入 2 件（透明 PNG、无透明 JPEG），刷新后仍在，离线可打开', async () => {
+const resetDb = async () => {
   await chrome.goto(`${server.origin}/tests/blank.html`);
   await chrome.evaluate(`new Promise((ok) => { const d = indexedDB.deleteDatabase('closet'); d.onsuccess = d.onerror = ok; })`);
-  await chrome.goto(`${server.origin}/`);
+};
+const statuses = `[...document.querySelectorAll('#queue .status')].map((s) => s.textContent).join(',')`;
+const clickButton = (scope, text) => `[...document.querySelectorAll('${scope} button')].find((b) => b.textContent.startsWith('${text}')).click()`;
+
+test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录入 2 件，刷新后仍在，离线可打开', async () => {
+  await resetDb();
+  // 假抠图：每张 50 ms，不加载模型
+  await chrome.goto(`${server.origin}/?fakeMatting=50`);
   await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
   await chrome.evaluate(PICK_FILES);
-  await chrome.waitFor(`document.querySelectorAll('#pending .card .thumb').length === 2`);
+  await chrome.waitFor(`${statuses} === '已抠图,待抠图'`);
+  await chrome.evaluate(clickButton('#queue', '开始抠图（1 张）'));
+  await chrome.waitFor(`document.getElementById('lastJob')?.textContent.startsWith('上次抠图：成功 1，失败 0')`);
+  assert.equal(await chrome.evaluate(statuses), '已抠图,已抠图');
+  await chrome.evaluate(`document.querySelectorAll('#queue .queued')[0].querySelector('button').click()`);
+  await chrome.evaluate(`document.querySelectorAll('#queue .queued')[1].querySelector('button').click()`);
+  await chrome.waitFor(`document.querySelectorAll('#pending .card .thumb').length === 2 && [...document.querySelectorAll('#pending .thumb')].every((i) => i.naturalWidth)`);
 
   const cards = await chrome.evaluate(`[...document.querySelectorAll('#pending .card')].map((c) => ({
-    hint: !!c.querySelector('.hint'), alpha: c.querySelector('.thumb').classList.contains('alpha'),
+    alpha: c.querySelector('.thumb').classList.contains('alpha'),
     w: c.querySelector('.thumb').naturalWidth, h: c.querySelector('.thumb').naturalHeight }))`);
-  assert.deepEqual(cards, [{ hint: false, alpha: true, w: 1024, h: 768 }, { hint: false, alpha: false, w: 1024, h: 768 }]);
+  assert.deepEqual(cards, [{ alpha: true, w: 1024, h: 768 }, { alpha: true, w: 1024, h: 768 }]);
 
   // 未选分类不能保存
   await chrome.evaluate(`document.querySelector('#pending .card .actions .primary').click()`);
@@ -97,6 +110,8 @@ test('应用：录入 2 件（透明 PNG、无透明 JPEG），刷新后仍在�
   await chrome.waitFor(`document.querySelectorAll('#pending .card').length === 1`);
   await chrome.evaluate(`document.querySelector('#pending .card .actions .primary').click()`);
   await chrome.waitFor(`document.querySelectorAll('#closet .tile').length === 2`);
+  // 录入后队列记录删除
+  await chrome.waitFor(`document.querySelectorAll('#queue .queued').length === 0`);
 
   await chrome.reload();
   await chrome.waitFor(`document.querySelectorAll('#closet .tile').length === 2`);
@@ -110,7 +125,7 @@ test('应用：录入 2 件（透明 PNG、无透明 JPEG），刷新后仍在�
   })()`);
   assert.deepEqual(saved, [
     { category: '上衣', seasons: ['夏', '秋'], scenes: ['通勤'], hasAlpha: true, type: 'image/webp' },
-    { category: '裤子', seasons: [], scenes: [], hasAlpha: false, type: 'image/jpeg' },
+    { category: '裤子', seasons: [], scenes: [], hasAlpha: true, type: 'image/png' },
   ]);
   const groups = await chrome.evaluate(`[...document.querySelectorAll('#closet h2')].map((h) => h.textContent)`);
   assert.deepEqual(groups, ['上衣 · 1', '裤子 · 1']);
@@ -150,4 +165,109 @@ test('应用：录入 2 件（透明 PNG、无透明 JPEG），刷新后仍在�
   await chrome.reload();
   await chrome.waitFor(`document.querySelectorAll('#closet .tile').length === 1`);
   await chrome.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+});
+
+// 页面里读队列和任务状态
+const QUEUE_STATE = `(async () => {
+  const { openStore } = await import('/store.js');
+  const s = await openStore();
+  const q = await s.listQueue(); const job = await s.getJob(); s.close();
+  return { statuses: q.map((r) => r.status), attempts: q.map((r) => r.attempts), job };
+})()`;
+
+// 选 n 张不透明 JPEG（待抠图）
+const pickJpegs = (n) => `(async () => {
+  const dt = new DataTransfer();
+  for (let i = 0; i < ${n}; i++) {
+    const c = document.createElement('canvas'); c.width = 800; c.height = 600;
+    const ctx = c.getContext('2d'); ctx.fillStyle = '#ddd'; ctx.fillRect(0, 0, 800, 600);
+    ctx.fillStyle = '#336'; ctx.fillRect(200, 100, 300 + i * 10, 300);
+    dt.items.add(new File([await new Promise((ok) => c.toBlob(ok, 'image/jpeg', 0.9))], 'p' + i + '.jpg', { type: 'image/jpeg' }));
+  }
+  const input = document.getElementById('fileInput');
+  input.files = dt.files;
+  input.dispatchEvent(new Event('change'));
+})()`;
+
+async function openWithQueue(n, delay) {
+  await resetDb();
+  await chrome.goto(`${server.origin}/?fakeMatting=${delay}`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  await chrome.evaluate(pickJpegs(n));
+  await chrome.waitFor(`document.querySelectorAll('#queue .queued').length === ${n}`);
+}
+
+// 等到页面正在处理某一张，直接重新打开页面，模拟处理中崩溃（IndexedDB 里留下 processing 记录，与崩溃相同）。
+// 不用 CDP Page.crash：装了 Service Worker 后，崩溃后的导航在 headless Chrome 里不返回
+async function crashWhileProcessing(url) {
+  await chrome.waitFor(`document.getElementById('progress') && (${QUEUE_STATE}).then((s) => s.statuses.includes('processing'))`, 15000);
+  await chrome.goto(url);
+}
+
+test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重试，同一张崩溃 2 次标为失败', async () => {
+  await openWithQueue(5, 1500);
+  const url = `${server.origin}/?fakeMatting=1500`;
+  await chrome.evaluate(clickButton('#queue', '开始抠图（5 张）'));
+  await crashWhileProcessing(url); // 第 1 张第 1 次崩溃
+  await chrome.waitFor(`(${QUEUE_STATE}).then((s) => s.job.recoveries === 1 && s.attempts[0] === 1)`);
+  let st;
+  await crashWhileProcessing(url); // 第 1 张第 2 次崩溃
+  await chrome.waitFor(`document.getElementById('lastJob')`, 30000);
+  st = await chrome.evaluate(QUEUE_STATE);
+  assert.deepEqual(st.statuses, ['cutout_failed', 'cutout_done', 'cutout_done', 'cutout_done', 'cutout_done']);
+  assert.equal(st.attempts[0], 2);
+  assert.equal(st.job.recoveries, 2);
+  assert.equal(st.job.reloads, 1); // 崩溃后的加载：第 2、3 张 → 刷新 → 第 4、5 张 → 结束
+  assert.equal(st.job.running, false);
+  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /成功 4，失败 1，取消 0 · 自动刷新 1 次 · 崩溃恢复 2 次/);
+  assert.equal(await chrome.evaluate(statuses), '抠图失败，用原图,已抠图,已抠图,已抠图,已抠图');
+});
+
+test('抠图队列：暂停后不再刷新，继续后做完；取消后剩下的标为未抠图', async () => {
+  await openWithQueue(3, 600);
+  await chrome.evaluate(clickButton('#queue', '开始抠图（3 张）'));
+  await chrome.waitFor(`document.getElementById('progress')`);
+  // 处理中：衣橱和录入按钮隐藏
+  assert.equal(await chrome.evaluate(`getComputedStyle(document.getElementById('addLabel')).display`), 'none');
+  // 第 1 张处理中时暂停：这张做完，之后不再处理、不刷新页面
+  await chrome.waitFor(`(${QUEUE_STATE}).then((s) => s.statuses[0] === 'processing')`);
+  await chrome.evaluate(clickButton('#queue', '暂停'));
+  await chrome.waitFor(`document.querySelector('#queue h2')?.textContent === '抠图已暂停'`);
+  await chrome.waitFor(`(${QUEUE_STATE}).then((s) => !s.statuses.includes('processing'))`);
+  await new Promise((ok) => setTimeout(ok, 1000));
+  let st = await chrome.evaluate(QUEUE_STATE);
+  assert.deepEqual(st.statuses, ['cutout_done', 'pending', 'pending']);
+  assert.equal(st.job.reloads, 0);
+  await chrome.evaluate(clickButton('#queue', '继续'));
+  await chrome.waitFor(`document.getElementById('lastJob')`, 15000);
+  st = await chrome.evaluate(QUEUE_STATE);
+  assert.deepEqual(st.statuses, ['cutout_done', 'cutout_done', 'cutout_done']);
+
+  await openWithQueue(3, 600);
+  await chrome.evaluate(clickButton('#queue', '开始抠图（3 张）'));
+  await chrome.waitFor(`document.getElementById('progress')`);
+  await chrome.evaluate(clickButton('#queue', '取消'));
+  await chrome.waitFor(`document.getElementById('lastJob')`);
+  await new Promise((ok) => setTimeout(ok, 1000));
+  st = await chrome.evaluate(QUEUE_STATE);
+  assert.equal(st.job.running, false);
+  assert.ok(st.statuses.filter((x) => x === 'skipped').length >= 2, st.statuses.join());
+  assert.equal(await chrome.evaluate(`getComputedStyle(document.getElementById('addLabel')).display`), 'block');
+});
+
+test('store.js：v1 数据库升级到 v2 时清空旧数据，新增队列表', async () => {
+  await resetDb();
+  const r = await chrome.evaluate(`(async () => {
+    await new Promise((ok, fail) => {
+      const o = indexedDB.open('closet', 1);
+      o.onupgradeneeded = () => o.result.createObjectStore('items', { keyPath: 'id' }).put({ id: 'old', category: '上衣' });
+      o.onsuccess = () => { o.result.close(); ok(); }; o.onerror = fail;
+    });
+    const { openStore } = await import('/store.js');
+    const s = await openStore();
+    const out = { items: (await s.list({ includeArchived: true })).length, queue: (await s.listQueue()).length, job: await s.getJob() };
+    s.close();
+    return out;
+  })()`);
+  assert.deepEqual(r, { items: 0, queue: 0, job: null });
 });

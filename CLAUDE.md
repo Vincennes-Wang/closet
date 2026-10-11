@@ -50,7 +50,7 @@
 - 当前定位：个人和家人朋友免费使用，非商用。
 - 平台：PWA，托管在 GitHub Pages。无构建步骤，无后端。第三方库只用 CDN 引入，并固定版本号。
 - 个人数据（衣物照片、搭配）只存在用户浏览器的 IndexedDB 中，绝不进仓库。
-- 应用内抠图：RMBG-1.4（`briaai/RMBG-1.4`，Bria 非商用许可，允许个人非商用使用）。模型 ID 只在一个配置常量里定义（spike 中为 `MATTING_MODELS.rmbg.id`），换模型只改这一处。
+- 应用内抠图：RMBG-1.4（`briaai/RMBG-1.4`，Bria 非商用许可，允许个人非商用使用）。模型 ID 只在 `config.js` 的 `MATTING_MODEL.id` 定义，换模型只改这一处。
 - 抠图是可选功能（2026-10-11 决策）：抠图失败或用户选"用原图"时，原图照常录入，应用完整可用。阶段 2a 在录入时批量抠图（队列），见下方"阶段计划"。仍接收透明 PNG（例如别处抠好的图）。
 - 备选方案：iOS 系统抠图（2026-10-11 用户真机验证可行，更正之前的"做不到"）。在"照片"里长按衣服，等系统抠出主体 → 菜单选"共享" → "保存图像"，得到透明 PNG，再在应用里录入。应用显示为棋盘格背景、`hasAlpha: true`。只作备选，主方案仍是应用内 RMBG。之前的"'文件'App 移除背景"说法不对，不要再用。应用内暂不加系统抠图提示。
 - 商用前置条件：如果以后收费或商用，必须先替换抠图模型，或购买 Bria 商业许可。替换候选（2026-10-10 核实）：`studioludens/birefnet-lite-512`（MIT，同类 `onnx-community/BiRefNet_512x512-ONNX` 也是 MIT）、`Xenova/slimsam-77-uniform`（SlimSAM，Apache-2.0，需要点选提示，不是全自动）。
@@ -98,9 +98,16 @@
 - 图片存储格式：长边缩到 1024，不存原图。有透明区域的图存 WebP；浏览器不能输出带透明的 WebP 时存 PNG。没有透明区域的图存 JPEG 0.9。启动时用 `image.js` 的 `probeWebpAlpha()` 检测，结果显示在页面"关于"区。
 - WebP 透明实测：Mac Chrome 155 可以；Mac Safari 27.0.1 不可以（`toBlob('image/webp')` 返回 `image/png`），所以 Safari 上透明图存 PNG。iPhone（iOS 27，2026-10-11 真机）：同样返回 `image/png`，透明图存 PNG。
 - 衣物记录字段见 `store.js` 的 `newItem()`；分类、季节、场景的取值只在 `options.js` 定义。改了取值要考虑已存数据。
-- `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v1，仓库 `items`）。改表结构必须升版本号并写迁移。
+- `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v2：`items` 衣物、`queue` 抠图队列、`meta` 任务状态 `job`）。改表结构必须升版本号并写迁移。例外：v1 → v2 经用户确认直接清空，不迁移。
 - Service Worker 缓存名 `closet-vN`（`sw.js`）。改了任何应用文件，发布前把 N 加 1，否则用户手机上一直是旧版本。
 - Safari 坑（2026-10-11 确认）：从 IndexedDB 读出的 Blob 不能原样 put 回去，否则本次会话里该记录的图片读不出来（"The object can not be found here"，刷新后恢复）。`store.update()` 先复制成新 Blob 再写入。以后任何"读出再写回"带 Blob 的记录都要这样做。Chrome 不复现，只能在 Safari 验证。
+- Safari 坑二（2026-10-11 确认，2a）：记录被改写后，改写前读出的 Blob 也读不出来（`createImageBitmap` 报 "An error occured reading the Blob argument"）。改写记录后要用改写后的新 Blob（`queue.js` 用 `markProcessing()` 的返回值）。
+
+### 阶段 2a 实现（2026-10-11）
+- 配置只在 `config.js`：`MATTING_MODEL`、`MATTING_PER_LOAD`（每次加载抠几张，默认 2）、`MAX_ATTEMPTS`（同一张失败几次标为失败，默认 2）。
+- `queue.js`：任务状态存 `meta.job`。页面加载时：`processing` 记录 = 上次崩溃，attempts+1；加载模型时连续崩溃 2 次自动暂停，防止无限刷新。
+- `model-worker.js`：抠图 Worker（复制自 `spike/rmbg-worker.js`）。URL 加 `?fakeMatting=毫秒` 时不加载模型，测试用。
+- 选图时透明图直接算"已抠图"。取消后剩下的标为"未抠图"，保留原图。处理完的照片暂时在队列区点"录入"，用原来的录入表单；2b 换成待确认列表。
 
 ### 配色（2026-10-11）
 - 阿根廷蓝白：`style.css` 顶部的变量。天蓝 `#74acdf` 用于国旗条和选中状态（配墨蓝字）；深蓝 `#1f5a8e` 用于操作按钮（白字）；金色 `#f6b40e` 只用在页头的五月太阳。页头是简化国旗（上下天蓝条 + 白底）。
@@ -117,8 +124,8 @@
 | 标签向量 | `spike/label-embeddings.json` | – | 用 fashionSigLIP fp32 文本模型在 Mac 上生成（spike 页面 `?mode=embed`）。改了 `GROUPS` 里的英文 prompt 后必须重新生成 |
 
 ## 目录
-- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`sw.js`、`manifest.webmanifest`、`icons/`）。
-- `tests/`：`node --test tests/*.test.mjs`。`store.test.mjs` 测纯函数；`browser.test.mjs` 用 headless Chrome（CDP，`tests/cdp.mjs`，无依赖）测真实 IndexedDB、录入流程和离线打开。需要本机装有 Chrome。
+- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`sw.js`、`manifest.webmanifest`、`icons/`）。
+- `tests/`：`node --test tests/*.test.mjs`。`store.test.mjs` 测纯函数；`browser.test.mjs` 用 headless Chrome（CDP，`tests/cdp.mjs`，无依赖）测真实 IndexedDB、录入流程、抠图队列（假模型）和离线打开。模拟崩溃用"处理中直接重新打开页面"，不用 CDP `Page.crash`（装了 Service Worker 后崩溃后的导航不返回）。需要本机装有 Chrome。
 - `spike/`：阶段 0 验证页（`index.html` 单文件）和预计算的标签向量 `label-embeddings.json`。
 - `private/`：本地测试照片等，不提交（`private/samples/` 放样本照片）。
 

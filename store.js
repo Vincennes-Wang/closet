@@ -2,8 +2,13 @@
 import { CATEGORIES, SEASONS, SCENES } from './options.js';
 
 const DB_NAME = 'closet';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = 'items';
+const QUEUE = 'queue'; // 待抠图 / 已抠图、还没录入的照片
+const META = 'meta'; // 键值：job = 抠图任务状态
+
+// 队列记录状态。processing 只在处理那一张时出现；页面加载时还看到它，说明上次处理到这张时页面崩溃了
+export const QUEUE_STATUS = ['pending', 'processing', 'cutout_done', 'cutout_failed', 'skipped'];
 
 // 可编辑字段；id、createdAt、image、hasAlpha 录入时确定，之后不经 update 修改
 const EDITABLE = ['name', 'category', 'subcategory', 'seasons', 'scenes', 'color', 'archived'];
@@ -65,19 +70,39 @@ const req = (r) => new Promise((ok, fail) => { r.onsuccess = () => ok(r.result);
 
 export async function openStore(idbFactory = globalThis.indexedDB) {
   const open = idbFactory.open(DB_NAME, DB_VERSION);
-  open.onupgradeneeded = () => {
-    const os = open.result.createObjectStore(STORE, { keyPath: 'id' });
-    os.createIndex('category', 'category');
+  // v2：用户确认 v1 的测试数据可以丢弃，直接删表重建，不写迁移
+  open.onupgradeneeded = (e) => {
+    const db = open.result;
+    if (e.oldVersion < 2) for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name);
+    db.createObjectStore(STORE, { keyPath: 'id' }).createIndex('category', 'category');
+    db.createObjectStore(QUEUE, { keyPath: 'id' }).createIndex('status', 'status');
+    db.createObjectStore(META);
   };
   const db = await req(open);
 
   // 每个操作一个事务；等事务 complete 才返回，确保已写入
-  async function tx(mode, fn) {
-    const t = db.transaction(STORE, mode);
+  async function tx(mode, fn, name = STORE) {
+    const t = db.transaction(name, mode);
     const done = new Promise((ok, fail) => { t.oncomplete = ok; t.onerror = () => fail(t.error); t.onabort = () => fail(t.error); });
-    const result = await fn(t.objectStore(STORE));
+    const result = await fn(t.objectStore(name));
     await done;
     return result;
+  }
+
+  const copyBlob = async (b) => (b ? new Blob([await b.arrayBuffer()], { type: b.type }) : b);
+
+  // 改一条队列记录。和 update() 一样先在事务外复制 Blob（Safari 坑）
+  async function patchQueued(id, fn) {
+    const current = await tx('readonly', (os) => req(os.get(id)), QUEUE);
+    if (!current) throw new Error(`找不到队列记录 ${id}`);
+    const next = fn({ ...current, original: await copyBlob(current.original), cutout: await copyBlob(current.cutout) });
+    await tx('readwrite', (os) => req(os.put(next)), QUEUE);
+    return next;
+  }
+
+  // 多条记录只改状态（取消时用）
+  async function setStatus(ids, status) {
+    for (const id of ids) await patchQueued(id, (r) => ({ ...r, status }));
   }
 
   // Safari：把从 IndexedDB 读出的 Blob 原样 put 回去，本次会话里这件衣物的图片就读不出来
@@ -106,6 +131,37 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
     archive: (id) => update(id, { archived: true }),
     unarchive: (id) => update(id, { archived: false }),
     remove: (id) => tx('readwrite', (os) => req(os.delete(id))),
+
+    // ---------- 抠图队列 ----------
+    // 透明图（别处已抠好）直接算抠图完成，不再进模型
+    async enqueue({ original, hasAlpha }, { id = crypto.randomUUID(), now = Date.now() } = {}) {
+      const rec = { id, createdAt: now, original, hasAlpha, cutout: hasAlpha ? original : null,
+        status: hasAlpha ? 'cutout_done' : 'pending', attempts: 0, error: '', ms: null };
+      await tx('readwrite', (os) => req(os.add(rec)), QUEUE);
+      return rec;
+    },
+    // 按加入顺序
+    listQueue: async () => (await tx('readonly', (os) => req(os.getAll()), QUEUE)).sort((a, b) => a.createdAt - b.createdAt),
+    getQueued: (id) => tx('readonly', (os) => req(os.get(id)), QUEUE),
+    markProcessing: (id) => patchQueued(id, (r) => ({ ...r, status: 'processing' })),
+    saveCutout: (id, cutout, ms) => patchQueued(id, (r) => ({ ...r, cutout, status: 'cutout_done', error: '', ms })),
+    // 失败一次（崩溃或报错）：次数到上限标失败、保留原图，否则回到待处理
+    failAttempt: (id, error, maxAttempts) => patchQueued(id, (r) => {
+      const attempts = r.attempts + 1;
+      return { ...r, attempts, error, status: attempts >= maxAttempts ? 'cutout_failed' : 'pending' };
+    }),
+    setStatus,
+    removeQueued: (id) => tx('readwrite', (os) => req(os.delete(id)), QUEUE),
+
+    // ---------- 任务状态 ----------
+    getJob: async () => (await tx('readonly', (os) => req(os.get('job')), META)) ?? null,
+    async setJob(patch) {
+      return tx('readwrite', async (os) => {
+        const next = { ...((await req(os.get('job'))) ?? {}), ...patch };
+        os.put(next, 'job');
+        return next;
+      }, META);
+    },
     close: () => db.close(),
   };
 }

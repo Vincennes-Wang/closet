@@ -1,6 +1,7 @@
 import { CATEGORIES, SEASONS, SCENES } from './options.js';
 import { openStore, groupByCategory } from './store.js';
 import { prepareImage, probeWebpAlpha } from './image.js';
+import { startJob, pauseJob, continueJob, cancelJob, summarize, resumeQueue } from './queue.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...children) => {
@@ -59,24 +60,24 @@ function itemFields(v = {}) {
   };
 }
 
-// ---------- 录入 ----------
+// ---------- 录入：选图只缩图、存进抠图队列，不加载模型 ----------
 $('fileInput').addEventListener('change', async (e) => {
   const files = [...e.target.files];
   e.target.value = '';
-  for (const file of files) {
-    const card = el('article', { className: 'pending card' }, el('p', { className: 'muted', textContent: `处理中：${file.name}` }));
-    $('pending').append(card);
+  const errors = [];
+  for (const [i, file] of files.entries()) {
+    $('queueMsg').textContent = `正在读取照片 ${i + 1} / ${files.length}`;
     try {
       const img = await prepareImage(file);
-      renderPending(card, img);
-    } catch (err) {
-      card.replaceChildren(el('p', { className: 'error', textContent: `${file.name} 读取失败：${err.message}` }),
-        el('button', { type: 'button', textContent: '关闭', onclick: () => card.remove() }));
-    }
+      await store.enqueue({ original: img.blob, hasAlpha: img.hasAlpha });
+    } catch (err) { errors.push(`${file.name} 读取失败：${err.message}`); }
   }
+  $('queueMsg').textContent = errors.join('；');
+  renderQueue();
 });
 
-function renderPending(card, img) {
+// 录入表单。onSaved 在保存成功后调用（从队列录入时删除队列记录）
+function renderPending(card, img, onSaved = () => {}) {
   const url = URL.createObjectURL(img.blob);
   const fields = itemFields();
   const msg = el('p', { className: 'error' });
@@ -87,6 +88,7 @@ function renderPending(card, img) {
     if (!v.category) { msg.textContent = '请选择分类'; return; }
     try {
       await store.add({ ...v, image: img.blob, hasAlpha: img.hasAlpha });
+      await onSaved();
       done();
       render();
     } catch (err) { msg.textContent = `保存失败：${err.message}`; }
@@ -156,6 +158,80 @@ function openEdit(item) {
   dialog.focus(); // showModal 默认聚焦第一个按钮（"上衣"），iOS 会在它外面画焦点圈
 }
 
+// ---------- 抠图队列 ----------
+const fake = new URLSearchParams(location.search).get('fakeMatting'); // 测试用，见 model-worker.js
+const qurls = new Set();
+const STATUS_TEXT = { pending: '待抠图', processing: '抠图中', cutout_done: '已抠图', cutout_failed: '抠图失败，用原图', skipped: '未抠图，用原图' };
+const duration = (ms) => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)} 分 ${s % 60} 秒`; };
+const progressText = (p) => `已处理 ${p.processed} / ${p.total}（失败 ${p.failed}）· 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}`;
+
+function queueButton(label, fn, cls = '') {
+  return el('button', { type: 'button', className: cls, textContent: label, onclick: fn });
+}
+
+async function renderQueue() {
+  for (const u of qurls) URL.revokeObjectURL(u);
+  qurls.clear();
+  const [job, queue] = await Promise.all([store.getJob(), store.listQueue()]);
+  const running = !!job?.running;
+  document.body.classList.toggle('processing', running);
+  wakeLock(running && !job.paused);
+  const box = $('queue');
+  if (running) {
+    const p = summarize(job, queue);
+    box.replaceChildren(el('div', { className: 'card' },
+      el('h2', { textContent: job.paused ? '抠图已暂停' : '正在抠图' }),
+      el('p', { id: 'progress', textContent: progressText(p) }),
+      job.paused ? '' : el('p', { className: 'hint', textContent: '处理中请保持页面在前台，屏幕不要锁定。页面会自动刷新，不用操作。' }),
+      el('p', { className: 'error', textContent: job.error ?? '' }),
+      el('div', { className: 'actions' },
+        job.paused
+          ? queueButton('继续', async () => { await continueJob(store); location.reload(); }, 'primary')
+          : queueButton('暂停', async () => { await pauseJob(store); renderQueue(); }),
+        queueButton('取消', async () => { await cancelJob(store); renderQueue(); render(); }, 'danger'))));
+    return;
+  }
+  const waiting = queue.filter((r) => r.status === 'pending').length;
+  const p = job?.endedAt ? summarize(job, queue) : null;
+  box.replaceChildren(...(queue.length ? [el('section', { className: 'card' },
+    el('h2', { textContent: `待录入 · ${queue.length}` }),
+    p ? el('p', { className: 'muted', id: 'lastJob', textContent: `上次抠图：成功 ${p.done}，失败 ${p.failed}，取消 ${p.skipped} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}${p.backend ? ` · ${p.backend}` : ''}` }) : '',
+    waiting ? el('div', { className: 'actions' },
+      queueButton(`开始抠图（${waiting} 张）`, async () => { await startJob(store); location.reload(); }, 'primary')) : '',
+    el('div', { className: 'grid' }, ...queue.map(queueTile)))] : []));
+}
+
+function queueTile(r) {
+  const blob = r.cutout ?? r.original;
+  const u = URL.createObjectURL(blob); qurls.add(u);
+  const alpha = r.status === 'cutout_done';
+  const actions = [];
+  if (r.status !== 'pending') {
+    actions.push(queueButton('录入', () => {
+      const card = el('article', { className: 'pending card' });
+      $('pending').append(card);
+      renderPending(card, { blob, hasAlpha: alpha }, async () => { await store.removeQueued(r.id); renderQueue(); });
+      card.scrollIntoView({ behavior: 'smooth' });
+    }, 'primary'));
+  }
+  actions.push(queueButton('删除', async () => { await store.removeQueued(r.id); renderQueue(); }));
+  return el('div', { className: 'tile queued' },
+    el('img', { src: u, alt: '', className: alpha ? 'alpha' : '' }),
+    el('span', { className: `status ${r.status}`, textContent: STATUS_TEXT[r.status] }),
+    el('div', { className: 'actions' }, ...actions));
+}
+
+// 处理中保持屏幕常亮；切到后台会自动释放，回到前台再申请
+let lock = null, wantLock = false;
+async function wakeLock(want) {
+  wantLock = want;
+  if (!want) { await lock?.release().catch(() => {}); lock = null; return; }
+  if (lock || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+  try { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => { lock = null; }); }
+  catch { /* 不支持或被拒绝：只靠提示 */ }
+}
+document.addEventListener('visibilitychange', () => { if (wantLock) wakeLock(true); });
+
 // ---------- 存储状态、诊断 ----------
 // 申请"空间不足时不自动清除"（persist），只在启动时做一次
 const persisted = (async () => {
@@ -180,6 +256,14 @@ async function showDiag() {
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Service Worker 注册失败', err));
 
-await render();
+// 抠图任务进行中时不渲染衣橱，少占内存
+const job = await store.getJob();
+if (!job?.running) await render();
+else $('storage').textContent = '正在抠图';
+await renderQueue();
 document.documentElement.dataset.ready = '1'; // 事件已绑定、衣橱已渲染（测试等这个标记）
 showDiag();
+if (job?.running) {
+  const result = await resumeQueue(store, { fake: fake === null ? null : Number(fake), onChange: renderQueue });
+  if (result !== 'reloading') { await renderQueue(); if (result !== 'paused') await render(); }
+}
