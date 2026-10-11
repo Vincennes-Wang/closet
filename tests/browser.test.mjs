@@ -120,6 +120,8 @@ test('应用：录入 2 件（透明 PNG、无透明 JPEG），刷新后仍在�
   await chrome.evaluate(`(() => { const i = document.querySelectorAll('#editForm input')[2]; i.value = '藏青'; })()`);
   await chrome.evaluate(`[...document.querySelectorAll('#editForm button')].find((b) => b.textContent === '保存').click()`);
   await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  // 保存后图片仍能显示（Safari 曾在这里显示不出图；Chrome 不复现，Safari 验证见 PROGRESS.md）
+  await chrome.waitFor(`[...document.querySelectorAll('#closet .tile img')].every((i) => i.complete && i.naturalWidth > 0)`);
   await chrome.evaluate(`document.querySelector('#closet .tile').click()`);
   assert.equal(await chrome.evaluate(`document.querySelectorAll('#editForm input')[2].value`), '藏青');
   await chrome.evaluate(`[...document.querySelectorAll('#editForm button')].find((b) => b.textContent === '归档').click()`);

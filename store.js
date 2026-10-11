@@ -80,11 +80,16 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
     return result;
   }
 
+  // Safari：把从 IndexedDB 读出的 Blob 原样 put 回去，本次会话里这件衣物的图片就读不出来
+  // （"The object can not be found here"，刷新后恢复）。所以先在事务外复制成新 Blob 再写入
   async function update(id, patch) {
+    const current = await tx('readonly', (os) => req(os.get(id)));
+    if (!current) throw new Error(`找不到衣物 ${id}`);
+    const image = new Blob([await current.image.arrayBuffer()], { type: current.image.type });
     return tx('readwrite', async (os) => {
       const item = await req(os.get(id));
       if (!item) throw new Error(`找不到衣物 ${id}`);
-      const next = applyPatch(item, patch);
+      const next = applyPatch({ ...item, image }, patch);
       os.put(next);
       return next;
     });
