@@ -1,26 +1,31 @@
 // 唯一访问 IndexedDB 的模块。其他代码只调用 openStore() 返回的方法。
-import { CATEGORIES, SEASONS, SCENES } from './options.js';
+import { SEASONS, SCENES } from './options.js';
+import { CATEGORIES, isValidPair } from './taxonomy.js';
 
 const DB_NAME = 'closet';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE = 'items';
-const QUEUE = 'queue'; // 待抠图 / 已抠图、还没录入的照片
-const META = 'meta'; // 键值：job = 抠图任务状态
+const QUEUE = 'queue'; // 选进来、还没确认录入的照片（抠图、分类都在这里做）
+const META = 'meta'; // 键值：job = 处理任务状态
+const CATS = 'categories'; // 用户自建分类，以及对内置分类的改名、隐藏（界面在阶段 4）
 
-// 队列记录状态。processing 只在处理那一张时出现；页面加载时还看到它，说明上次处理到这张时页面崩溃了
+// 队列记录的抠图状态。processing 只在处理那一张时出现；页面加载时还看到它，说明上次处理到这张时页面崩溃了
 export const QUEUE_STATUS = ['pending', 'processing', 'cutout_done', 'cutout_failed', 'skipped'];
+// 队列记录的分类状态（classify.status），含义同上
+export const CLASSIFY_STATUS = ['pending', 'processing', 'done', 'failed', 'skipped'];
 
 // 可编辑字段；id、createdAt、image、hasAlpha 录入时确定，之后不经 update 修改
-const EDITABLE = ['name', 'category', 'subcategory', 'seasons', 'scenes', 'color', 'archived'];
+const EDITABLE = ['name', 'categoryId', 'subcategoryId', 'seasons', 'scenes', 'color', 'archived'];
 
+// 衣物只存分类 id，不存中文名（显示名从 taxonomy.js 和分类表取）
 export function validate(item) {
   const errors = [];
-  if (!CATEGORIES.includes(item.category)) errors.push(`category 无效：${item.category}`);
+  if (!isValidPair(item.categoryId, item.subcategoryId)) errors.push(`分类无效：${item.categoryId} / ${item.subcategoryId}`);
   for (const [key, allowed] of [['seasons', SEASONS], ['scenes', SCENES]]) {
     if (!Array.isArray(item[key])) errors.push(`${key} 必须是数组`);
     else for (const v of item[key]) if (!allowed.includes(v)) errors.push(`${key} 含无效值：${v}`);
   }
-  for (const key of ['name', 'subcategory', 'color']) {
+  for (const key of ['name', 'color']) {
     if (typeof item[key] !== 'string') errors.push(`${key} 必须是字符串`);
   }
   if (typeof item.hasAlpha !== 'boolean') errors.push('hasAlpha 必须是布尔值');
@@ -40,8 +45,8 @@ export function newItem(input, { id = crypto.randomUUID(), now = Date.now() } = 
     image: input.image,
     hasAlpha: input.hasAlpha,
     name: (input.name ?? '').trim(),
-    category: input.category,
-    subcategory: (input.subcategory ?? '').trim(),
+    categoryId: input.categoryId,
+    subcategoryId: input.subcategoryId ?? null,
     seasons: copyList(input.seasons),
     scenes: copyList(input.scenes),
     color: (input.color ?? '').trim(),
@@ -59,10 +64,10 @@ export function applyPatch(item, patch) {
   return validate(next);
 }
 
-// 按一级分类分组，组按 CATEGORIES 顺序，组内新的在前；空组不返回
+// 按一级分类分组，组按 taxonomy.js 顺序，组内新的在前；空组不返回
 export function groupByCategory(items) {
   return CATEGORIES
-    .map((category) => ({ category, items: items.filter((i) => i.category === category).sort((a, b) => b.createdAt - a.createdAt) }))
+    .map((c) => ({ categoryId: c.id, items: items.filter((i) => i.categoryId === c.id).sort((a, b) => b.createdAt - a.createdAt) }))
     .filter((g) => g.items.length);
 }
 
@@ -70,13 +75,15 @@ const req = (r) => new Promise((ok, fail) => { r.onsuccess = () => ok(r.result);
 
 export async function openStore(idbFactory = globalThis.indexedDB) {
   const open = idbFactory.open(DB_NAME, DB_VERSION);
-  // v2：用户确认 v1 的测试数据可以丢弃，直接删表重建，不写迁移
+  // v2、v3：用户确认旧的测试数据可以丢弃（2026-10-11 两次），直接删表重建，不写迁移。
+  // 以后再改结构必须写迁移（见 CLAUDE.md）
   open.onupgradeneeded = (e) => {
     const db = open.result;
-    if (e.oldVersion < 2) for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name);
-    db.createObjectStore(STORE, { keyPath: 'id' }).createIndex('category', 'category');
+    if (e.oldVersion < 3) for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name);
+    db.createObjectStore(STORE, { keyPath: 'id' }).createIndex('categoryId', 'categoryId');
     db.createObjectStore(QUEUE, { keyPath: 'id' }).createIndex('status', 'status');
     db.createObjectStore(META);
+    db.createObjectStore(CATS, { keyPath: 'id' });
   };
   const db = await req(open);
 
@@ -142,7 +149,8 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
     // thumb：队列里显示用的缩略图（抠图后换成抠图结果的缩略图）
     async enqueue({ original, hasAlpha, thumb = null }, { id = crypto.randomUUID(), now = Date.now() } = {}) {
       const rec = { id, createdAt: now, original, hasAlpha, thumb, cutout: hasAlpha ? original : null,
-        status: hasAlpha ? 'cutout_done' : 'pending', attempts: 0, error: '', ms: null };
+        status: hasAlpha ? 'cutout_done' : 'pending', attempts: 0, error: '', ms: null,
+        classify: { status: 'pending', attempts: 0, error: '', top3: [], ms: null } };
       await tx('readwrite', (os) => req(os.add(rec)), QUEUE);
       return rec;
     },
@@ -160,6 +168,7 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
       return { ...r, attempts, error, status: attempts >= maxAttempts ? 'cutout_failed' : 'pending' };
     }),
     setStatus,
+    patchQueued,
     removeQueued: (id) => tx('readwrite', (os) => req(os.delete(id)), QUEUE),
 
     // ---------- 任务状态 ----------
@@ -172,6 +181,18 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
         os.put(next, 'job');
         return next;
       }, META);
+    },
+
+    // ---------- 分类表（自建分类、改名、隐藏）。规则见 CLAUDE.md"分类规则"，界面在阶段 4 ----------
+    listCategoryRows: () => tx('readonly', (os) => req(os.getAll()), CATS),
+    putCategoryRow: (row) => tx('readwrite', (os) => req(os.put(row)), CATS),
+    // 只能删自建分类，且分类下没有衣物
+    async removeCategoryRow(id) {
+      const row = await tx('readonly', (os) => req(os.get(id)), CATS);
+      if (!row || row.builtin !== false) throw new Error('内置分类不能删除，只能隐藏');
+      const used = (await tx('readonly', (os) => req(os.getAll()))).some((i) => i.categoryId === id || i.subcategoryId === id);
+      if (used) throw new Error('这个分类下还有衣物，先把衣物移到别的分类');
+      await tx('readwrite', (os) => req(os.delete(id)), CATS);
     },
     close: () => db.close(),
   };

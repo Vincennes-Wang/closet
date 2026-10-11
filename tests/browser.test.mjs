@@ -15,8 +15,8 @@ test('store.js：增、查、改、归档、恢复、删除，重开数据库后
     let s = await openStore();
     const out = {};
     const image = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
-    const a = await s.add({ image, hasAlpha: true, category: '上衣', seasons: ['夏'], scenes: ['通勤'], name: '白T' });
-    const b = await s.add({ image, hasAlpha: false, category: '裤子', seasons: [], scenes: [] });
+    const a = await s.add({ image, hasAlpha: true, categoryId: 'top', subcategoryId: 'top.casual_tee', seasons: ['夏'], scenes: ['通勤'], name: '白T' });
+    const b = await s.add({ image, hasAlpha: false, categoryId: 'bottom', subcategoryId: 'bottom.jeans', seasons: [], scenes: [] });
     out.count = (await s.list()).length;
     await s.update(a.id, { color: '白', seasons: ['春', '夏'] });
     await s.archive(b.id);
@@ -31,7 +31,7 @@ test('store.js：增、查、改、归档、恢复、删除，重开数据库后
     await s.remove(b.id);
     out.afterRemove = (await s.list({ includeArchived: true })).length;
     try { await s.update('nope', { color: 'x' }); out.missing = 'no error'; } catch (e) { out.missing = e.message; }
-    try { await s.add({ image, hasAlpha: true, category: '泳衣', seasons: [], scenes: [] }); out.invalid = 'no error'; } catch (e) { out.invalid = e.message; }
+    try { await s.add({ image, hasAlpha: true, categoryId: '泳衣', seasons: [], scenes: [] }); out.invalid = 'no error'; } catch (e) { out.invalid = e.message; }
     out.afterInvalid = (await s.list({ includeArchived: true })).length;
     out.aId = a.id;
     s.close();
@@ -44,7 +44,7 @@ test('store.js：增、查、改、归档、恢复、删除，重开数据库后
   assert.equal(r.afterUnarchive, 2);
   assert.equal(r.afterRemove, 1);
   assert.match(r.missing, /找不到衣物/);
-  assert.match(r.invalid, /category 无效/);
+  assert.match(r.invalid, /分类无效/);
   assert.equal(r.afterInvalid, 1);
 });
 
@@ -85,8 +85,12 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
   await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
   await chrome.evaluate(PICK_FILES);
   await chrome.waitFor(`${statuses} === '已抠图,待抠图'`);
-  await chrome.evaluate(clickButton('#queue', '开始抠图（1 张）'));
-  await chrome.waitFor(`document.getElementById('lastJob')?.textContent.startsWith('上次抠图：成功 1，失败 0')`);
+  // 2 张都要分类，1 张要抠图
+  await chrome.evaluate(clickButton('#queue', '开始处理（2 张）'));
+  await chrome.waitFor(`document.getElementById('lastJob')?.textContent.startsWith('上次抠图：成功 2，失败 0')`, 20000); // 透明 PNG 也算在本次任务里（要分类），算抠图成功
+  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /分类 2 张，失败 0$/);
+  // 假分类按标签顺序打分，第一项是"休闲短袖"
+  assert.deepEqual(await chrome.evaluate(`[...document.querySelectorAll('#queue .guess')].map((g) => g.textContent)`), ['休闲短袖 50%', '休闲短袖 50%']);
   assert.equal(await chrome.evaluate(statuses), '已抠图,已抠图');
   await chrome.evaluate(`document.querySelectorAll('#queue .queued')[0].querySelector('button').click()`);
   await chrome.evaluate(`document.querySelectorAll('#queue .queued')[1].querySelector('button').click()`);
@@ -97,15 +101,19 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
     w: c.querySelector('.thumb').naturalWidth, h: c.querySelector('.thumb').naturalHeight }))`);
   assert.deepEqual(cards, [{ alpha: true, w: 1024, h: 768 }, { alpha: true, w: 1024, h: 768 }]);
 
-  // 未选分类不能保存
-  await chrome.evaluate(`document.querySelector('#pending .card .actions .primary').click()`);
-  assert.equal(await chrome.evaluate(`document.querySelector('#pending .card .error').textContent`), '请选择分类');
+  // 录入表单按分类建议预填：上衣 / 休闲短袖 / 夏
+  const pickedChips = (i) => `[...document.querySelectorAll('#pending .card')[${i}].querySelectorAll('.chip[aria-pressed="true"]')].map((b) => b.textContent)`;
+  assert.deepEqual(await chrome.evaluate(pickedChips(0)), ['上衣', '休闲短袖', '夏']);
 
-  await chrome.evaluate(clickChip(0, '上衣'));
-  await chrome.evaluate(clickChip(0, '夏'));
+  // 第 2 张改成裤子：没选细分不能保存；选了牛仔裤后季节自动改成春秋冬
+  await chrome.evaluate(clickChip(1, '裤子'));
+  await chrome.evaluate(`document.querySelectorAll('#pending .card')[1].querySelector('.actions .primary').click()`);
+  assert.equal(await chrome.evaluate(`document.querySelectorAll('#pending .card')[1].querySelector('.error').textContent`), '请选择细分');
+  await chrome.evaluate(clickChip(1, '牛仔裤'));
+  assert.deepEqual(await chrome.evaluate(pickedChips(1)), ['裤子', '牛仔裤', '春', '秋', '冬']);
+
   await chrome.evaluate(clickChip(0, '秋'));
   await chrome.evaluate(clickChip(0, '通勤'));
-  await chrome.evaluate(clickChip(1, '裤子'));
   await chrome.evaluate(`document.querySelectorAll('#pending .card')[0].querySelector('.actions .primary').click()`);
   await chrome.waitFor(`document.querySelectorAll('#pending .card').length === 1`);
   await chrome.evaluate(`document.querySelector('#pending .card .actions .primary').click()`);
@@ -120,27 +128,28 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
     const s = await openStore();
     const items = await s.list();
     s.close();
-    return items.map((i) => ({ category: i.category, seasons: i.seasons, scenes: i.scenes, hasAlpha: i.hasAlpha, type: i.image.type }))
-      .sort((a, b) => a.category.localeCompare(b.category));
+    return items.map((i) => ({ categoryId: i.categoryId, subcategoryId: i.subcategoryId, seasons: i.seasons, scenes: i.scenes, hasAlpha: i.hasAlpha, type: i.image.type }))
+      .sort((a, b) => a.categoryId.localeCompare(b.categoryId));
   })()`);
   assert.deepEqual(saved, [
-    { category: '上衣', seasons: ['夏', '秋'], scenes: ['通勤'], hasAlpha: true, type: 'image/webp' },
-    { category: '裤子', seasons: [], scenes: [], hasAlpha: true, type: 'image/png' },
+    { categoryId: 'bottom', subcategoryId: 'bottom.jeans', seasons: ['春', '秋', '冬'], scenes: [], hasAlpha: true, type: 'image/png' },
+    { categoryId: 'top', subcategoryId: 'top.casual_tee', seasons: ['夏', '秋'], scenes: ['通勤'], hasAlpha: true, type: 'image/webp' },
   ]);
   const groups = await chrome.evaluate(`[...document.querySelectorAll('#closet h2')].map((h) => h.textContent)`);
   assert.deepEqual(groups, ['上衣 · 1', '裤子 · 1']);
+  assert.deepEqual(await chrome.evaluate(`[...document.querySelectorAll('#closet .tile span')].map((s) => s.textContent)`), ['休闲短袖', '牛仔裤']);
 
   // 编辑：改颜色；归档后衣橱只剩 1 件，已归档区可见
   await chrome.evaluate(`document.querySelector('#closet .tile').click()`);
   // 打开编辑时焦点在弹窗本身，不在"上衣"按钮上（iOS 会画焦点圈）
   assert.equal(await chrome.evaluate(`document.activeElement.id`), 'editDialog');
-  await chrome.evaluate(`(() => { const i = document.querySelectorAll('#editForm input')[2]; i.value = '藏青'; })()`);
+  await chrome.evaluate(`(() => { const i = document.querySelectorAll('#editForm input')[1]; i.value = '藏青'; })()`);
   await chrome.evaluate(`[...document.querySelectorAll('#editForm button')].find((b) => b.textContent === '保存').click()`);
   await chrome.waitFor(`!document.getElementById('editDialog').open`);
   // 保存后图片仍能显示（Safari 曾在这里显示不出图；Chrome 不复现，Safari 验证见 PROGRESS.md）
   await chrome.waitFor(`[...document.querySelectorAll('#closet .tile img')].every((i) => i.complete && i.naturalWidth > 0)`);
   await chrome.evaluate(`document.querySelector('#closet .tile').click()`);
-  assert.equal(await chrome.evaluate(`document.querySelectorAll('#editForm input')[2].value`), '藏青');
+  assert.equal(await chrome.evaluate(`document.querySelectorAll('#editForm input')[1].value`), '藏青');
   await chrome.evaluate(`[...document.querySelectorAll('#editForm button')].find((b) => b.textContent === '归档').click()`);
   await chrome.waitFor(`document.querySelectorAll('#closet .tile').length === 1`);
   await chrome.evaluate(`document.getElementById('showArchived').click()`);
@@ -207,12 +216,12 @@ async function crashWhileProcessing(url) {
 test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重试，同一张崩溃 2 次标为失败', async () => {
   await openWithQueue(5, 1500);
   const url = `${server.origin}/?fakeMatting=1500`;
-  await chrome.evaluate(clickButton('#queue', '开始抠图（5 张）'));
+  await chrome.evaluate(clickButton('#queue', '开始处理（5 张）'));
   await crashWhileProcessing(url); // 第 1 张第 1 次崩溃
   await chrome.waitFor(`(${QUEUE_STATE}).then((s) => s.job.recoveries === 1 && s.attempts[0] === 1)`);
   let st;
   await crashWhileProcessing(url); // 第 1 张第 2 次崩溃
-  await chrome.waitFor(`document.getElementById('lastJob')`, 30000);
+  await chrome.waitFor(`document.getElementById('lastJob')`, 40000);
   await chrome.waitFor(`[...document.querySelectorAll('#queue .queued img')].every((i) => i.naturalWidth)`);
   st = await chrome.evaluate(QUEUE_STATE);
   assert.deepEqual(st.statuses, ['cutout_failed', 'cutout_done', 'cutout_done', 'cutout_done', 'cutout_done']);
@@ -227,14 +236,18 @@ test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重�
   st = await chrome.evaluate(QUEUE_STATE);
   const ev = st.job.events;
   assert.deepEqual(ev.filter((v) => v.e === 'crash').map((v) => [v.i, v.attempts]), [[1, 1], [1, 2]]);
-  assert.deepEqual(ev.filter((v) => v.e === 'load').map((v) => v.unexpected), [false, true, true, false]);
-  assert.deepEqual(ev.filter((v) => v.e === 'done').map((v) => v.i), [2, 3, 4, 5]);
+  // 抠图 4 次加载（2 次崩溃），分类 1 次加载
+  assert.deepEqual(ev.filter((v) => v.e === 'load').map((v) => v.unexpected), [false, true, true, false, false]);
+  assert.deepEqual(ev.filter((v) => v.e === 'done' && v.k === 'matting').map((v) => v.i), [2, 3, 4, 5]);
+  // 抠图失败的第 1 张也用原图分类
+  assert.deepEqual(ev.filter((v) => v.e === 'done' && v.k === 'classify').map((v) => v.i), [1, 2, 3, 4, 5]);
+  assert.ok(ev.findIndex((v) => v.e === 'phase') < ev.findIndex((v) => v.k === 'classify'));
   assert.deepEqual(ev.slice(-4).map((v) => v.e), ['finishReload', 'resultsLoad', 'wait', 'resultsShown']);
-  // 第一次加载不等；之后 3 次加载（2 次崩溃后、1 次自动刷新后）都先等再加载模型
-  assert.equal(ev.filter((v) => v.e === 'loadWait').length, 3);
+  // 第一次加载不等；之后 4 次加载（2 次崩溃后、1 次自动刷新后、进入分类后）都先等再加载模型
+  assert.equal(ev.filter((v) => v.e === 'loadWait').length, 4);
   assert.equal(ev.findIndex((v) => v.e === 'loadWait') > ev.findIndex((v) => v.e === 'model'), true);
-  // 每批结束都先释放模型再刷新：4 次页面加载，2 次中途崩溃（没有释放），2 次正常结束 → 2 次释放
-  assert.equal(ev.filter((v) => v.e === 'dispose').length, 2);
+  // 每批结束都先释放模型再刷新：抠图 4 次加载（2 次中途崩溃没有释放）+ 分类 1 次 → 3 次释放
+  assert.equal(ev.filter((v) => v.e === 'dispose').length, 3);
   // 队列里显示缩略图（长边 256），不是 1024 的原图
   const sizes = await chrome.evaluate(`[...document.querySelectorAll('#queue .queued img')].map((i) => Math.max(i.naturalWidth, i.naturalHeight))`);
   assert.deepEqual(sizes, [256, 256, 256, 256, 256]);
@@ -245,26 +258,26 @@ test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重�
 
 test('抠图队列：暂停后不再刷新，继续后做完；取消后剩下的标为未抠图', async () => {
   await openWithQueue(3, 600);
-  await chrome.evaluate(clickButton('#queue', '开始抠图（3 张）'));
+  await chrome.evaluate(clickButton('#queue', '开始处理（3 张）'));
   await chrome.waitFor(`document.getElementById('progress')`);
   // 处理中：衣橱和录入按钮隐藏
   assert.equal(await chrome.evaluate(`getComputedStyle(document.getElementById('addLabel')).display`), 'none');
   // 第 1 张处理中时暂停：这张做完，之后不再处理、不刷新页面
   await chrome.waitFor(`(${QUEUE_STATE}).then((s) => s.statuses[0] === 'processing')`);
   await chrome.evaluate(clickButton('#queue', '暂停'));
-  await chrome.waitFor(`document.querySelector('#queue h2')?.textContent === '抠图已暂停'`);
+  await chrome.waitFor(`document.querySelector('#queue h2')?.textContent === '处理已暂停'`);
   await chrome.waitFor(`(${QUEUE_STATE}).then((s) => !s.statuses.includes('processing'))`);
   await new Promise((ok) => setTimeout(ok, 1000));
   let st = await chrome.evaluate(QUEUE_STATE);
   assert.deepEqual(st.statuses, ['cutout_done', 'pending', 'pending']);
   assert.equal(st.job.reloads, 0);
   await chrome.evaluate(clickButton('#queue', '继续'));
-  await chrome.waitFor(`document.getElementById('lastJob')`, 15000);
+  await chrome.waitFor(`document.getElementById('lastJob')`, 30000);
   st = await chrome.evaluate(QUEUE_STATE);
   assert.deepEqual(st.statuses, ['cutout_done', 'cutout_done', 'cutout_done']);
 
   await openWithQueue(3, 600);
-  await chrome.evaluate(clickButton('#queue', '开始抠图（3 张）'));
+  await chrome.evaluate(clickButton('#queue', '开始处理（3 张）'));
   await chrome.waitFor(`document.getElementById('progress')`);
   await chrome.evaluate(clickButton('#queue', '取消'));
   await chrome.waitFor(`document.getElementById('lastJob')`);

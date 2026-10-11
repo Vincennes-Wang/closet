@@ -1,13 +1,48 @@
-// 抠图队列：每次页面加载最多抠 MATTING_PER_LOAD 张，然后刷新页面续传。
-// 原因：iPhone 上 RMBG 的内存在页面生命周期内累积，终止 Worker 也不释放，只有刷新页面才能回到起点（阶段 0 结论）。
+// 处理队列：先抠图（phase = matting），全部抠完刷新一次，再分类（phase = classify）。
+// 每次页面加载最多处理 perLoad 张，然后刷新页面续传。
+// 原因：iPhone 上模型内存在页面生命周期内累积，终止 Worker 也不释放，只有刷新页面才能回到起点（阶段 0、2a 结论）。
 // 任务状态存在 IndexedDB 的 job 里，刷新或崩溃后从这里接着做。
-import { MATTING_MODEL, MATTING_PER_LOAD, MAX_ATTEMPTS, THUMB_SIDE, LOAD_DELAY_MS } from './config.js';
+import {
+  MATTING_MODEL, MATTING_PER_LOAD, CLASSIFY_MODEL, CLASSIFY_PER_LOAD, MAX_ATTEMPTS, THUMB_SIDE, LOAD_DELAY_MS,
+} from './config.js';
 
-// 本次任务包含的记录：开始时所有待处理的照片
+// 两段的差别都在这里：用哪个模型、每次加载几张、怎么判断"待处理 / 处理中"、怎么记成功和失败
+const PHASES = {
+  matting: {
+    task: 'matting', model: MATTING_MODEL, perLoad: MATTING_PER_LOAD, name: '抠图',
+    todo: (r) => r.status === 'pending',
+    inProgress: (r) => r.status === 'processing',
+    mark: (store, id) => store.markProcessing(id),
+    // 用 markProcessing 返回的新 Blob：Safari 上记录被改写后，之前读出的 Blob 读不出来
+    // （"An error occured reading the Blob argument to createImageBitmap"）
+    input: (r) => r.original,
+    msg: () => ({ thumbSide: THUMB_SIDE }),
+    save: (store, id, out) => store.saveCutout(id, out.cutout, out.ms, out.thumb),
+    fail: (store, id, error) => store.failAttempt(id, error, MAX_ATTEMPTS).then((r) => r.attempts),
+  },
+  classify: {
+    task: 'classify', model: CLASSIFY_MODEL, perLoad: CLASSIFY_PER_LOAD, name: '分类',
+    todo: (r) => r.classify?.status === 'pending' && r.status !== 'pending' && r.status !== 'processing',
+    inProgress: (r) => r.classify?.status === 'processing',
+    mark: (store, id) => store.patchQueued(id, (r) => ({ ...r, classify: { ...r.classify, status: 'processing' } })),
+    // 抠图成功用抠图结果，失败或跳过用原图
+    input: (r) => (r.status === 'cutout_done' ? r.cutout : r.original),
+    msg: () => ({}),
+    save: (store, id, out) => store.patchQueued(id,
+      (r) => ({ ...r, classify: { ...r.classify, status: 'done', error: '', top3: out.ranked.slice(0, 3), ms: out.ms } }),
+      (latest) => latest.classify?.status === 'processing'),
+    fail: (store, id, error) => store.patchQueued(id, (r) => {
+      const attempts = r.classify.attempts + 1;
+      return { ...r, classify: { ...r.classify, attempts, error, status: attempts >= MAX_ATTEMPTS ? 'failed' : 'pending' } };
+    }).then((r) => r.classify.attempts),
+  },
+};
+
+// 本次任务包含的记录：开始时所有还要抠图或分类的照片
 export async function startJob(store) {
-  const ids = (await store.listQueue()).filter((r) => r.status === 'pending').map((r) => r.id);
+  const ids = (await store.listQueue()).filter((r) => r.status === 'pending' || r.classify?.status === 'pending').map((r) => r.id);
   return store.setJob({
-    running: true, paused: false, ids, startedAt: Date.now(), endedAt: null,
+    phase: 'matting', running: true, paused: false, ids, startedAt: Date.now(), endedAt: null,
     reloads: 0, recoveries: 0, loading: false, loadCrashes: 0, error: '', events: [{ t: Date.now(), e: 'start', n: ids.length }],
   });
 }
@@ -37,10 +72,16 @@ export const continueJob = async (store) => {
   await log(store, { e: 'continue' });
 };
 
-// 取消：停止任务，未处理的照片标为"未抠图"，保留原图，可以按原图录入
+// 取消：停止任务，未抠图的照片标为"未抠图"（保留原图），未分类的标为"未分类"（录入时手动选）
 export async function cancelJob(store) {
-  const left = (await store.listQueue()).filter((r) => r.status === 'pending' || r.status === 'processing');
-  await store.setStatus(left.map((r) => r.id), 'skipped');
+  for (const r of await store.listQueue()) {
+    const matting = r.status === 'pending' || r.status === 'processing';
+    const classify = r.classify?.status === 'pending' || r.classify?.status === 'processing';
+    if (matting || classify) {
+      await store.patchQueued(r.id, (x) => ({ ...x, ...(matting ? { status: 'skipped' } : {}),
+        ...(classify ? { classify: { ...x.classify, status: 'skipped' } } : {}) }));
+    }
+  }
   await store.setJob({ running: false, paused: false, loading: false, endedAt: Date.now() });
   await log(store, { e: 'cancel' });
 }
@@ -49,11 +90,12 @@ export async function cancelJob(store) {
 const EVENT_TEXT = {
   start: (v) => `开始，共 ${v.n} 张`,
   load: (v) => (v.unexpected ? '页面加载（上个页面意外结束）' : '页面加载'),
-  model: (v) => `模型就绪 ${v.ms} ms`,
-  begin: (v) => `开始第 ${v.i} 张`,
-  done: (v) => `第 ${v.i} 张抠完 ${v.ms} ms`,
+  model: (v) => `${v.k === 'classify' ? '分类' : '抠图'}模型就绪 ${v.ms} ms`,
+  begin: (v) => `开始${v.k === 'classify' ? '分类' : ''}第 ${v.i} 张`,
+  done: (v) => (v.k === 'classify' ? `第 ${v.i} 张分类完 ${v.ms} ms` : `第 ${v.i} 张抠完 ${v.ms} ms`),
+  phase: () => '抠图全部完成，刷新后开始分类',
   error: (v) => (v.i ? `第 ${v.i} 张出错：${v.msg}` : `出错：${v.msg}`),
-  crash: (v) => `发现第 ${v.i} 张处理时页面崩溃（第 ${v.attempts} 次）`,
+  crash: (v) => `发现第 ${v.i} 张${v.k === 'classify' ? '分类' : '处理'}时页面崩溃（第 ${v.attempts} 次）`,
   loadCrash: () => '发现加载模型时页面崩溃',
   reload: () => '自动刷新',
   dispose: (v) => `释放模型 ${v.ms} ms`,
@@ -75,9 +117,12 @@ export function summarize(job, queue) {
   const ids = new Set(job?.ids ?? []);
   const mine = queue.filter((r) => ids.has(r.id));
   const count = (s) => mine.filter((r) => r.status === s).length;
+  const cCount = (s) => mine.filter((r) => r.classify?.status === s).length;
   const done = count('cutout_done'), failed = count('cutout_failed'), skipped = count('skipped');
   return {
+    phase: job?.phase ?? 'matting',
     total: ids.size, done, failed, skipped, processed: done + failed,
+    classified: cCount('done'), classifyFailed: cCount('failed'), classifyProcessed: cCount('done') + cCount('failed'),
     reloads: job?.reloads ?? 0, recoveries: job?.recoveries ?? 0, backend: job?.backend ?? '',
     elapsedMs: job?.startedAt ? (job.endedAt ?? Date.now()) - job.startedAt : 0,
   };
@@ -100,7 +145,8 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
   if (!job?.running) return 'idle';
   // 上一条不是"自动刷新"或"开始"，说明上个页面意外结束（崩溃或被关掉）
   const last = job.events?.at(-1)?.e;
-  await log(store, { e: 'load', unexpected: !['start', 'reload', 'continue'].includes(last) });
+  await log(store, { e: 'load', unexpected: !['start', 'reload', 'continue', 'phase'].includes(last) });
+  const P = PHASES[job.phase ?? 'matting'];
 
   // 上次在加载模型时崩溃（loading 标记没清掉）。连续 MAX_ATTEMPTS 次就暂停，避免无限刷新
   if (job.loading) {
@@ -108,7 +154,7 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
     job = await store.setJob({ loading: false, loadCrashes, recoveries: job.recoveries + 1 });
     await log(store, { e: 'loadCrash' });
     if (loadCrashes >= MAX_ATTEMPTS) {
-      await store.setJob({ paused: true, error: '加载抠图模型时页面连续崩溃，已暂停。点"继续"重试。' });
+      await store.setJob({ paused: true, error: `加载${P.name}模型时页面连续崩溃，已暂停。点"继续"重试。` });
       onChange();
       return 'paused';
     }
@@ -116,15 +162,15 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
   if (job.paused) return 'paused';
 
   // 上次处理到一半页面崩溃：这张算失败一次，次数到上限标为失败
-  for (const r of (await store.listQueue()).filter((x) => x.status === 'processing')) {
-    const after = await store.failAttempt(r.id, '处理时页面崩溃', MAX_ATTEMPTS);
+  for (const r of (await store.listQueue()).filter(P.inProgress)) {
+    const attempts = await P.fail(store, r.id, '处理时页面崩溃');
     job = await store.setJob({ recoveries: job.recoveries + 1 });
-    await log(store, { e: 'crash', i: indexOf(job, r.id), attempts: after.attempts });
+    await log(store, { e: 'crash', k: P.task, i: indexOf(job, r.id), attempts });
   }
 
-  const pending = () => store.listQueue().then((q) => q.filter((r) => r.status === 'pending'));
-  const batch = (await pending()).slice(0, MATTING_PER_LOAD);
-  if (!batch.length) { await finish(store); await log(store, { e: 'finish' }); onChange(); return 'finished'; }
+  const pending = () => store.listQueue().then((q) => q.filter((r) => (job.ids ?? []).includes(r.id) && P.todo(r)));
+  const batch = (await pending()).slice(0, P.perLoad);
+  if (!batch.length) return nextPhase(store, P, { onChange, reload });
 
   // 任务第一次加载不等；之后每次（自动刷新、崩溃后、继续）都先等一会儿再加载模型
   if (last !== 'start') {
@@ -136,32 +182,33 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
 
   const w = new Worker(new URL('./model-worker.js', import.meta.url), { type: 'module' });
   try {
+    // 分类要用 Mac 上预先算好的标签向量
+    const labels = P.task === 'classify' ? (await (await fetch(new URL('./label-embeddings.json', import.meta.url))).json()).labels : null;
     await store.setJob({ loading: true });
-    const ready = await workerCall(w, { type: 'init', ...MATTING_MODEL, modelId: MATTING_MODEL.id, fake });
-    await store.setJob({ loading: false, loadCrashes: 0, backend: `${ready.device}/${ready.dtype}` });
-    await log(store, { e: 'model', ms: ready.loadMs });
+    const ready = await workerCall(w, { type: 'init', task: P.task, ...P.model, modelId: P.model.id, labels, fake });
+    await store.setJob({ loading: false, loadCrashes: 0, [P.task === 'classify' ? 'classifyBackend' : 'backend']: `${ready.device}/${ready.dtype}` });
+    await log(store, { e: 'model', k: P.task, ms: ready.loadMs });
 
     for (const r of batch) {
       if ((await store.getJob()).paused || !(await store.getJob()).running) break;
-      // 用 markProcessing 返回的新 Blob：Safari 上记录被改写后，之前读出的 Blob 读不出来
-      // （"An error occured reading the Blob argument to createImageBitmap"）
-      const current = await store.markProcessing(r.id);
-      await log(store, { e: 'begin', i: indexOf(job, r.id) });
+      // 用 mark 返回的新记录读图（Safari 坑，见 PHASES.matting）
+      const current = await P.mark(store, r.id);
+      await log(store, { e: 'begin', k: P.task, i: indexOf(job, r.id) });
       onChange();
       try {
-        const bitmap = await createImageBitmap(current.original);
-        const { cutout, thumb, ms } = await workerCall(w, { type: 'run', bitmap, thumbSide: THUMB_SIDE }, [bitmap]);
-        await store.saveCutout(r.id, cutout, ms, thumb);
-        await log(store, { e: 'done', i: indexOf(job, r.id), ms });
+        const bitmap = await createImageBitmap(P.input(current));
+        const out = await workerCall(w, { type: 'run', bitmap, ...P.msg() }, [bitmap]);
+        await P.save(store, r.id, out);
+        await log(store, { e: 'done', k: P.task, i: indexOf(job, r.id), ms: out.ms });
       } catch (err) {
-        await store.failAttempt(r.id, err.message, MAX_ATTEMPTS);
-        await log(store, { e: 'error', i: indexOf(job, r.id), msg: err.message });
+        await P.fail(store, r.id, err.message);
+        await log(store, { e: 'error', k: P.task, i: indexOf(job, r.id), msg: err.message });
       }
       onChange();
     }
   } catch (err) {
     // 模型加载失败（不是崩溃，例如断网）：暂停，让用户决定
-    await store.setJob({ loading: false, paused: true, error: `加载抠图模型失败：${err.message}` });
+    await store.setJob({ loading: false, paused: true, error: `加载${P.name}模型失败：${err.message}` });
     await log(store, { e: 'error', msg: err.message });
     onChange();
     return 'paused';
@@ -176,15 +223,25 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
   job = await store.getJob();
   if (!job.running) return 'idle';
   if (job.paused) return 'paused';
-  // 全部抠完：这个页面跑过模型，内存高，不在这里显示 12 张结果图，刷新到干净页面再显示（iPhone 曾在这一步崩溃）
-  if (!(await pending()).length) {
-    await finish(store);
-    await log(store, { e: 'finishReload' });
+  if (!(await pending()).length) return nextPhase(store, P, { onChange, reload, ranModel: true });
+  await store.setJob({ reloads: job.reloads + 1 });
+  await log(store, { e: 'reload' });
+  reload();
+  return 'reloading';
+}
+
+// 这一段做完了：抠图 → 刷新后分类；分类 → 结束。
+// 这个页面跑过模型时，不在这里显示结果图，刷新到干净页面再显示（iPhone 2a 曾在这一步崩溃）
+async function nextPhase(store, P, { onChange, reload, ranModel = false }) {
+  if (P.task === 'matting') {
+    await store.setJob({ phase: 'classify' });
+    await log(store, { e: 'phase' });
     reload();
     return 'reloading';
   }
-  await store.setJob({ reloads: job.reloads + 1 });
-  await log(store, { e: 'reload' });
+  await finish(store);
+  if (!ranModel) { await log(store, { e: 'finish' }); onChange(); return 'finished'; }
+  await log(store, { e: 'finishReload' });
   reload();
   return 'reloading';
 }
