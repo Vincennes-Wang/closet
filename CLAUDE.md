@@ -109,6 +109,7 @@
 - `model-worker.js`：抠图 Worker（复制自 `spike/rmbg-worker.js`）。URL 加 `?fakeMatting=毫秒` 时不加载模型，测试用。
 - 全部抠完后再刷新一次，等 `RESULTS_DELAY_MS`（2 秒）再显示结果（iPhone 两次验收都在显示 12 张结果图时崩溃）。
 - 队列只显示缩略图（记录字段 `thumb`，长边 `THUMB_SIDE` = 256），"录入"时才用原尺寸。每批结束先 `dispose` 模型再结束 Worker、刷新。
+- 刷新后（任务第一次加载除外）等 `LOAD_DELAY_MS`（3 秒）再加载模型。iPhone 前三次验收 6 次崩溃里有 4 次在"刷新后马上加载模型"。
 - `saveCutout()` 只在记录仍是 `processing` 时保存，已取消或已判为崩溃的不覆盖。
 - 事件时间线存 `job.events`，界面"详细记录"可展开，用来确认崩在哪一步。时间线文字在 `queue.js` `EVENT_TEXT`。
 - 发布后第一次打开，Service Worker 先给旧文件、后台更新，第二次打开才是新版（Safari 实测）。验收前先打开一次、完全关掉再开。

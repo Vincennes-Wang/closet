@@ -1,7 +1,7 @@
 // 抠图队列：每次页面加载最多抠 MATTING_PER_LOAD 张，然后刷新页面续传。
 // 原因：iPhone 上 RMBG 的内存在页面生命周期内累积，终止 Worker 也不释放，只有刷新页面才能回到起点（阶段 0 结论）。
 // 任务状态存在 IndexedDB 的 job 里，刷新或崩溃后从这里接着做。
-import { MATTING_MODEL, MATTING_PER_LOAD, MAX_ATTEMPTS, THUMB_SIDE } from './config.js';
+import { MATTING_MODEL, MATTING_PER_LOAD, MAX_ATTEMPTS, THUMB_SIDE, LOAD_DELAY_MS } from './config.js';
 
 // 本次任务包含的记录：开始时所有待处理的照片
 export async function startJob(store) {
@@ -57,6 +57,7 @@ const EVENT_TEXT = {
   loadCrash: () => '发现加载模型时页面崩溃',
   reload: () => '自动刷新',
   dispose: (v) => `释放模型 ${v.ms} ms`,
+  loadWait: (v) => `等待 ${v.ms} ms 再加载模型`,
   wait: (v) => `等待 ${v.ms} ms 再显示结果`,
   finish: () => '全部完成',
   finishReload: () => '全部完成，刷新后显示结果',
@@ -124,6 +125,13 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
   const pending = () => store.listQueue().then((q) => q.filter((r) => r.status === 'pending'));
   const batch = (await pending()).slice(0, MATTING_PER_LOAD);
   if (!batch.length) { await finish(store); await log(store, { e: 'finish' }); onChange(); return 'finished'; }
+
+  // 任务第一次加载不等；之后每次（自动刷新、崩溃后、继续）都先等一会儿再加载模型
+  if (last !== 'start') {
+    await log(store, { e: 'loadWait', ms: LOAD_DELAY_MS });
+    onChange();
+    await new Promise((ok) => setTimeout(ok, LOAD_DELAY_MS));
+  }
   onChange();
 
   const w = new Worker(new URL('./model-worker.js', import.meta.url), { type: 'module' });

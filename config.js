@@ -16,5 +16,9 @@ export const THUMB_SIDE = 256;
 // 全部抠完、刷新到新页面后，等这么久再显示结果图，给上一个页面的内存回收时间
 export const RESULTS_DELAY_MS = 2000;
 
+// 刷新后（非任务第一次加载）等这么久再加载模型，给上一个页面的内存回收时间。
+// iPhone 三次验收共 4 次崩溃发生在"刷新后马上加载模型"时
+export const LOAD_DELAY_MS = 3000;
+
 // 同一张图失败（页面崩溃或模型报错）达到这个次数，标为抠图失败，保留原图
 export const MAX_ATTEMPTS = 2;

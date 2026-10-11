@@ -230,6 +230,9 @@ test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重�
   assert.deepEqual(ev.filter((v) => v.e === 'load').map((v) => v.unexpected), [false, true, true, false]);
   assert.deepEqual(ev.filter((v) => v.e === 'done').map((v) => v.i), [2, 3, 4, 5]);
   assert.deepEqual(ev.slice(-4).map((v) => v.e), ['finishReload', 'resultsLoad', 'wait', 'resultsShown']);
+  // 第一次加载不等；之后 3 次加载（2 次崩溃后、1 次自动刷新后）都先等再加载模型
+  assert.equal(ev.filter((v) => v.e === 'loadWait').length, 3);
+  assert.equal(ev.findIndex((v) => v.e === 'loadWait') > ev.findIndex((v) => v.e === 'model'), true);
   // 每批结束都先释放模型再刷新：4 次页面加载，2 次中途崩溃（没有释放），2 次正常结束 → 2 次释放
   assert.equal(ev.filter((v) => v.e === 'dispose').length, 2);
   // 队列里显示缩略图（长边 256），不是 1024 的原图
