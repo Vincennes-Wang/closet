@@ -34,13 +34,26 @@ async function runFake(canvas) {
   return canvas.convertToBlob({ type: 'image/png' });
 }
 
-async function runMatting(bitmap) {
+// 抠图结果的缩略图（透明 PNG，长边 side）
+async function thumbOf(canvas, side) {
+  const s = Math.min(1, side / Math.max(canvas.width, canvas.height));
+  const t = new OffscreenCanvas(Math.round(canvas.width * s), Math.round(canvas.height * s));
+  const ctx = t.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(canvas, 0, 0, t.width, t.height);
+  try { return await t.convertToBlob({ type: 'image/png' }); } finally { t.width = 0; }
+}
+
+async function runMatting(bitmap, thumbSide) {
   const canvas = bitmapToCanvas(bitmap);
   const w = canvas.width, h = canvas.height;
   const t0 = performance.now();
   const temps = []; // 本张产生的所有张量，结束时统一 dispose
   try {
-    if (fake !== null) return { cutout: await runFake(canvas), ms: Math.round(performance.now() - t0) };
+    if (fake !== null) {
+      const cutout = await runFake(canvas);
+      return { cutout, thumb: await thumbOf(canvas, thumbSide), ms: Math.round(performance.now() - t0) };
+    }
     const { pixel_values } = await processor(RawImage.fromCanvas(canvas).rgb());
     temps.push(pixel_values);
     const out = await model({ [spec.input]: pixel_values });
@@ -56,7 +69,7 @@ async function runMatting(bitmap) {
     for (let i = 0; i < w * h; i++) img.data[i * 4 + 3] = mask.data[i * ch];
     ctx.putImageData(img, 0, 0);
     const cutout = await canvas.convertToBlob({ type: 'image/png' });
-    return { cutout, ms: Math.round(performance.now() - t0) };
+    return { cutout, thumb: await thumbOf(canvas, thumbSide), ms: Math.round(performance.now() - t0) };
   } finally {
     for (const t of temps) { try { t.dispose(); } catch { /* 已释放 */ } }
     canvas.width = 0; // iOS 要显式释放 canvas 内存
@@ -67,7 +80,7 @@ self.onmessage = async ({ data }) => {
   const { id, type } = data;
   try {
     if (type === 'init') self.postMessage({ id, ok: true, ...(await init(data)) });
-    else if (type === 'run') self.postMessage({ id, ok: true, ...(await runMatting(data.bitmap)) });
+    else if (type === 'run') self.postMessage({ id, ok: true, ...(await runMatting(data.bitmap, data.thumbSide)) });
     else if (type === 'dispose') {
       await model?.dispose();
       model = null; processor = null;

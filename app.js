@@ -1,7 +1,8 @@
 import { CATEGORIES, SEASONS, SCENES } from './options.js';
 import { openStore, groupByCategory } from './store.js';
-import { prepareImage, probeWebpAlpha } from './image.js';
-import { startJob, pauseJob, continueJob, cancelJob, summarize, resumeQueue, eventLines, noteResultsLoad, noteResultsShown } from './queue.js';
+import { prepareImage, probeWebpAlpha, makeThumb } from './image.js';
+import { THUMB_SIDE, RESULTS_DELAY_MS } from './config.js';
+import { startJob, pauseJob, continueJob, cancelJob, summarize, resumeQueue, eventLines, noteResultsLoad, noteWait, noteResultsShown } from './queue.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...children) => {
@@ -69,7 +70,8 @@ $('fileInput').addEventListener('change', async (e) => {
     $('queueMsg').textContent = `正在读取照片 ${i + 1} / ${files.length}`;
     try {
       const img = await prepareImage(file);
-      await store.enqueue({ original: img.blob, hasAlpha: img.hasAlpha });
+      const thumb = await makeThumb(img.blob, img.hasAlpha, THUMB_SIDE);
+      await store.enqueue({ original: img.blob, hasAlpha: img.hasAlpha, thumb });
     } catch (err) { errors.push(`${file.name} 读取失败：${err.message}`); }
   }
   $('queueMsg').textContent = errors.join('；');
@@ -209,8 +211,9 @@ async function renderQueue() {
 }
 
 function queueTile(r) {
-  const blob = r.cutout ?? r.original;
-  const u = URL.createObjectURL(blob); qurls.add(u);
+  const blob = r.cutout ?? r.original; // 录入用原尺寸
+  const u = URL.createObjectURL(r.thumb ?? blob); qurls.add(u); // 显示用缩略图
+
   const alpha = r.status === 'cutout_done';
   const actions = [];
   if (r.status !== 'pending') {
@@ -265,7 +268,12 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catc
 
 // 抠图任务进行中时不渲染衣橱，少占内存
 const job = await store.getJob();
-if (job && !job.running) await noteResultsLoad(store);
+if (job && !job.running && await noteResultsLoad(store)) {
+  $('queueMsg').textContent = '抠图完成，正在准备结果…';
+  await new Promise((ok) => setTimeout(ok, RESULTS_DELAY_MS));
+  await noteWait(store, RESULTS_DELAY_MS);
+  $('queueMsg').textContent = '';
+}
 if (!job?.running) await render();
 else $('storage').textContent = '正在抠图';
 await renderQueue();

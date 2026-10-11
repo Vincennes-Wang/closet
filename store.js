@@ -95,7 +95,8 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
   async function patchQueued(id, fn) {
     const current = await tx('readonly', (os) => req(os.get(id)), QUEUE);
     if (!current) throw new Error(`找不到队列记录 ${id}`);
-    const next = fn({ ...current, original: await copyBlob(current.original), cutout: await copyBlob(current.cutout) });
+    const next = fn({ ...current, original: await copyBlob(current.original),
+      cutout: await copyBlob(current.cutout), thumb: await copyBlob(current.thumb) });
     await tx('readwrite', (os) => req(os.put(next)), QUEUE);
     return next;
   }
@@ -134,8 +135,9 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
 
     // ---------- 抠图队列 ----------
     // 透明图（别处已抠好）直接算抠图完成，不再进模型
-    async enqueue({ original, hasAlpha }, { id = crypto.randomUUID(), now = Date.now() } = {}) {
-      const rec = { id, createdAt: now, original, hasAlpha, cutout: hasAlpha ? original : null,
+    // thumb：队列里显示用的缩略图（抠图后换成抠图结果的缩略图）
+    async enqueue({ original, hasAlpha, thumb = null }, { id = crypto.randomUUID(), now = Date.now() } = {}) {
+      const rec = { id, createdAt: now, original, hasAlpha, thumb, cutout: hasAlpha ? original : null,
         status: hasAlpha ? 'cutout_done' : 'pending', attempts: 0, error: '', ms: null };
       await tx('readwrite', (os) => req(os.add(rec)), QUEUE);
       return rec;
@@ -144,7 +146,9 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
     listQueue: async () => (await tx('readonly', (os) => req(os.getAll()), QUEUE)).sort((a, b) => a.createdAt - b.createdAt),
     getQueued: (id) => tx('readonly', (os) => req(os.get(id)), QUEUE),
     markProcessing: (id) => patchQueued(id, (r) => ({ ...r, status: 'processing' })),
-    saveCutout: (id, cutout, ms) => patchQueued(id, (r) => ({ ...r, cutout, status: 'cutout_done', error: '', ms })),
+    // 只在记录仍是 processing 时保存：已被取消、或已被新页面判为崩溃的，不覆盖
+    saveCutout: (id, cutout, ms, thumb = null) => patchQueued(id, (r) => (r.status !== 'processing' ? r
+      : { ...r, cutout, thumb: thumb ?? r.thumb, status: 'cutout_done', error: '', ms })),
     // 失败一次（崩溃或报错）：次数到上限标失败、保留原图，否则回到待处理
     failAttempt: (id, error, maxAttempts) => patchQueued(id, (r) => {
       const attempts = r.attempts + 1;

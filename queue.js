@@ -1,7 +1,7 @@
 // 抠图队列：每次页面加载最多抠 MATTING_PER_LOAD 张，然后刷新页面续传。
 // 原因：iPhone 上 RMBG 的内存在页面生命周期内累积，终止 Worker 也不释放，只有刷新页面才能回到起点（阶段 0 结论）。
 // 任务状态存在 IndexedDB 的 job 里，刷新或崩溃后从这里接着做。
-import { MATTING_MODEL, MATTING_PER_LOAD, MAX_ATTEMPTS } from './config.js';
+import { MATTING_MODEL, MATTING_PER_LOAD, MAX_ATTEMPTS, THUMB_SIDE } from './config.js';
 
 // 本次任务包含的记录：开始时所有待处理的照片
 export async function startJob(store) {
@@ -18,13 +18,17 @@ const indexOf = (job, id) => (job.ids ?? []).indexOf(id) + 1; // 第几张，从
 
 // 抠完后刷新到干净页面才显示结果图。显示前记"结果页面加载"，图片都解码完记"结果已显示"。
 // 显示结果图时崩溃的话，时间线就停在"结果页面加载"
+// 返回 true 表示这是抠完后的那次刷新，调用方要先等 RESULTS_DELAY_MS 再显示结果
 export async function noteResultsLoad(store) {
   const job = await store.getJob();
-  if (job && !job.running && job.events?.at(-1)?.e === 'finishReload') await log(store, { e: 'resultsLoad' });
+  if (!(job && !job.running && job.events?.at(-1)?.e === 'finishReload')) return false;
+  await log(store, { e: 'resultsLoad' });
+  return true;
 }
+export const noteWait = (store, ms) => log(store, { e: 'wait', ms });
 export async function noteResultsShown(store) {
   const job = await store.getJob();
-  if (job && !job.running && job.events?.at(-1)?.e === 'resultsLoad') await log(store, { e: 'resultsShown' });
+  if (job && !job.running && job.events?.at(-1)?.e === 'wait') await log(store, { e: 'resultsShown' });
 }
 
 export const pauseJob = async (store) => { await store.setJob({ paused: true }); await log(store, { e: 'pause' }); };
@@ -52,6 +56,8 @@ const EVENT_TEXT = {
   crash: (v) => `发现第 ${v.i} 张处理时页面崩溃（第 ${v.attempts} 次）`,
   loadCrash: () => '发现加载模型时页面崩溃',
   reload: () => '自动刷新',
+  dispose: (v) => `释放模型 ${v.ms} ms`,
+  wait: (v) => `等待 ${v.ms} ms 再显示结果`,
   finish: () => '全部完成',
   finishReload: () => '全部完成，刷新后显示结果',
   resultsLoad: () => '结果页面加载',
@@ -136,8 +142,8 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
       onChange();
       try {
         const bitmap = await createImageBitmap(current.original);
-        const { cutout, ms } = await workerCall(w, { type: 'run', bitmap }, [bitmap]);
-        await store.saveCutout(r.id, cutout, ms);
+        const { cutout, thumb, ms } = await workerCall(w, { type: 'run', bitmap, thumbSide: THUMB_SIDE }, [bitmap]);
+        await store.saveCutout(r.id, cutout, ms, thumb);
         await log(store, { e: 'done', i: indexOf(job, r.id), ms });
       } catch (err) {
         await store.failAttempt(r.id, err.message, MAX_ATTEMPTS);
@@ -152,6 +158,10 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
     onChange();
     return 'paused';
   } finally {
+    // 先在 Worker 里释放模型（WebGPU 显存等），再结束 Worker。阶段 0 Mac Safari 实测能释放大部分内存
+    const t0 = performance.now();
+    await Promise.race([workerCall(w, { type: 'dispose' }).catch(() => {}), new Promise((ok) => setTimeout(ok, 3000))]);
+    await log(store, { e: 'dispose', ms: Math.round(performance.now() - t0) });
     w.terminate();
   }
 

@@ -46,6 +46,19 @@ export function probeWebpAlpha() {
   return webpProbe;
 }
 
+// 缩略图：长边 side，透明图存 PNG，其余 JPEG
+export async function makeThumb(blob, hasAlpha, side) {
+  const bmp = await createImageBitmap(blob);
+  const s = Math.min(1, side / Math.max(bmp.width, bmp.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bmp.width * s); canvas.height = Math.round(bmp.height * s);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  bmp.close();
+  try { return await toBlob(canvas, hasAlpha ? 'image/png' : 'image/jpeg', 0.85); } finally { canvas.width = 0; }
+}
+
 // 文件 → { blob, hasAlpha, width, height }。透明图存 WebP（不支持时 PNG），不透明图存 JPEG
 export async function prepareImage(file) {
   const bmp = await downscaleBitmap(file);

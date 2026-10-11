@@ -10,5 +10,11 @@ export const MATTING_MODEL = {
 // 每次页面加载最多抠几张，之后自动刷新页面释放内存。iPhone 只抠图时第 3 张崩溃（阶段 0 第四次实测）
 export const MATTING_PER_LOAD = 2;
 
+// 队列里显示的缩略图长边（像素）。12 张 1024 px 结果图解码后约 50 MB，iPhone 上显示时崩溃过
+export const THUMB_SIDE = 256;
+
+// 全部抠完、刷新到新页面后，等这么久再显示结果图，给上一个页面的内存回收时间
+export const RESULTS_DELAY_MS = 2000;
+
 // 同一张图失败（页面崩溃或模型报错）达到这个次数，标为抠图失败，保留原图
 export const MAX_ATTEMPTS = 2;

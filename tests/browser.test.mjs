@@ -213,6 +213,7 @@ test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重�
   let st;
   await crashWhileProcessing(url); // 第 1 张第 2 次崩溃
   await chrome.waitFor(`document.getElementById('lastJob')`, 30000);
+  await chrome.waitFor(`[...document.querySelectorAll('#queue .queued img')].every((i) => i.naturalWidth)`);
   st = await chrome.evaluate(QUEUE_STATE);
   assert.deepEqual(st.statuses, ['cutout_failed', 'cutout_done', 'cutout_done', 'cutout_done', 'cutout_done']);
   assert.equal(st.attempts[0], 2);
@@ -228,7 +229,12 @@ test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重�
   assert.deepEqual(ev.filter((v) => v.e === 'crash').map((v) => [v.i, v.attempts]), [[1, 1], [1, 2]]);
   assert.deepEqual(ev.filter((v) => v.e === 'load').map((v) => v.unexpected), [false, true, true, false]);
   assert.deepEqual(ev.filter((v) => v.e === 'done').map((v) => v.i), [2, 3, 4, 5]);
-  assert.deepEqual(ev.slice(-3).map((v) => v.e), ['finishReload', 'resultsLoad', 'resultsShown']);
+  assert.deepEqual(ev.slice(-4).map((v) => v.e), ['finishReload', 'resultsLoad', 'wait', 'resultsShown']);
+  // 每批结束都先释放模型再刷新：4 次页面加载，2 次中途崩溃（没有释放），2 次正常结束 → 2 次释放
+  assert.equal(ev.filter((v) => v.e === 'dispose').length, 2);
+  // 队列里显示缩略图（长边 256），不是 1024 的原图
+  const sizes = await chrome.evaluate(`[...document.querySelectorAll('#queue .queued img')].map((i) => Math.max(i.naturalWidth, i.naturalHeight))`);
+  assert.deepEqual(sizes, [256, 256, 256, 256, 256]);
   const lines = await chrome.evaluate(`document.querySelector('#queue .timeline pre').textContent`);
   assert.match(lines, /发现第 1 张处理时页面崩溃（第 2 次）/);
   assert.match(lines, /全部完成，刷新后显示结果/);
