@@ -1,5 +1,5 @@
 // 分类准确率（Mac 上运行：node tools/eval.mjs）。
-// 样本：private/samples/*.jpg；标注：private/labels.json（{ "IMG_4015.jpg": "top.short_sleeve", ... }，不提交）。
+// 样本：private/samples/*.jpg；标注：private/labels.json（{ "IMG_4015.jpg": "top.casual_tee", ... }，不提交）。
 // 标注文件不存在时生成模板和 id 对照表，只输出预测结果。
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';

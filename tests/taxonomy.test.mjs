@@ -16,7 +16,7 @@ test('id 唯一，二级 id 以一级 id 开头，季节取值合法', () => {
 
 test('打分项：全部内置二级 + 没有二级的一级；每项都有英文 prompt', () => {
   const l = leaves();
-  assert.equal(l.length, 29);
+  assert.equal(l.length, 30);
   assert.ok(l.every((x) => x.en));
   assert.deepEqual(l.filter((x) => !x.subcategoryId).map((x) => x.id), ['set', 'bag', 'accessory', 'hat']);
   assert.deepEqual(split('top.cardigan_layer'), { categoryId: 'top', subcategoryId: 'top.cardigan_layer' });
@@ -24,7 +24,8 @@ test('打分项：全部内置二级 + 没有二级的一级；每项都有英�
 });
 
 test('季节规则按用户给的表', () => {
-  assert.deepEqual(seasonsFor('top', 'top.short_sleeve'), ['夏']);
+  assert.deepEqual(seasonsFor('top', 'top.casual_tee'), ['夏']);
+  assert.deepEqual(seasonsFor('top', 'top.sport_tee'), ['夏']);
   assert.deepEqual(seasonsFor('top', 'top.cardigan_layer'), ['春', '秋']);
   assert.deepEqual(seasonsFor('bottom', 'bottom.jeans'), ['春', '秋', '冬']);
   assert.deepEqual(seasonsFor('outer', 'outer.wool_coat'), ['冬']);

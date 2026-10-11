@@ -6,10 +6,12 @@ const SPRING_AUTUMN = ['春', '秋'];
 
 export const CATEGORIES = [
   { id: 'top', zh: '上衣', subs: [
-    { id: 'top.short_sleeve', zh: '短袖', en: 'a short-sleeve t-shirt', seasons: ['夏'] },
+    // 短袖分两类（用户 2026-10-11 决定）：休闲（T 恤、Polo 衫）和运动（速干面料）。Polo 衫写进休闲短袖的 prompt，否则会被判成衬衫
+    { id: 'top.casual_tee', zh: '休闲短袖', en: 'a casual short-sleeve t-shirt or polo shirt', seasons: ['夏'] },
+    { id: 'top.sport_tee', zh: '运动短袖', en: 'a short-sleeve athletic sports t-shirt made of technical fabric', seasons: ['夏'] },
     { id: 'top.long_sleeve', zh: '长袖线衣', en: 'a long-sleeve cotton jersey t-shirt', seasons: SPRING_AUTUMN },
     { id: 'top.tank', zh: '背心', en: 'a sleeveless tank top', seasons: ['夏'] },
-    { id: 'top.shirt', zh: '衬衫', en: 'a button-up collared shirt', seasons: SPRING_AUTUMN },
+    { id: 'top.shirt', zh: '衬衫', en: 'a dress shirt or blouse with buttons all the way down the front', seasons: SPRING_AUTUMN },
     { id: 'top.light_sweater', zh: '薄毛衣', en: 'a thin lightweight knit pullover sweater', seasons: SPRING_AUTUMN },
     { id: 'top.heavy_sweater', zh: '厚毛衣', en: 'a thick chunky wool pullover sweater', seasons: ['冬'] },
     // 外搭：叠穿在外面的针织开衫、罩衫。prompt 强调"针织、开襟、叠穿"，和外套里的夹克、风衣区分
