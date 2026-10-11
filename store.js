@@ -169,6 +169,21 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
     }),
     setStatus,
     patchQueued,
+    // 确认录入：用抠图结果（或用户选的原图）新建衣物，同一个事务里删掉队列记录。图片只存一份。
+    // 和 update() 一样先在事务外复制 Blob（Safari 坑）
+    async confirmQueued(id, { categoryId, subcategoryId, seasons, useOriginal = false }) {
+      const rec = await tx('readonly', (os) => req(os.get(id)), QUEUE);
+      if (!rec) throw new Error(`找不到队列记录 ${id}`);
+      const cut = rec.status === 'cutout_done' && !useOriginal;
+      const image = await copyBlob(cut ? rec.cutout : rec.original);
+      const item = newItem({ image, hasAlpha: cut || rec.hasAlpha, categoryId, subcategoryId, seasons, scenes: [] });
+      const t = db.transaction([STORE, QUEUE], 'readwrite');
+      const done = new Promise((ok, fail) => { t.oncomplete = ok; t.onerror = () => fail(t.error); t.onabort = () => fail(t.error); });
+      t.objectStore(STORE).add(item);
+      t.objectStore(QUEUE).delete(id);
+      await done;
+      return item;
+    },
     removeQueued: (id) => tx('readwrite', (os) => req(os.delete(id)), QUEUE),
 
     // ---------- 任务状态 ----------

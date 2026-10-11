@@ -39,7 +39,7 @@ function chips(name, options, selected, multiple) {
 const picked = (box) => [...box.children].filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.value);
 const setPicked = (box, values) => { for (const b of box.children) b.setAttribute('aria-pressed', String(values.includes(b.dataset.value))); };
 
-// v.autoSeasons：选了细分类后，季节自动填成 taxonomy.js 的默认值（新录入时用；编辑时不改用户已选的季节）
+// 编辑表单（新录入走待确认列表）。换分类不改用户已选的季节
 function itemFields(v = {}) {
   const opts = (nodes) => nodes.map((n) => ({ value: n.id, label: n.zh }));
   const category = chips('category', opts(CATEGORIES), v.categoryId ? [v.categoryId] : [], false);
@@ -51,10 +51,6 @@ function itemFields(v = {}) {
     const c = getNode(picked(category)[0]);
     sub = c?.subs.length ? chips('subcategory', opts(c.subs), selected ? [selected] : [], false) : null;
     subBox.replaceChildren(sub ? el('div', { className: 'field' }, el('span', { textContent: '细分' }), sub) : '');
-    sub?.addEventListener('change', () => {
-      if (v.autoSeasons) setPicked(seasons, seasonsFor(c.id, picked(sub)[0]));
-    });
-    if (v.autoSeasons && c && !c.subs.length) setPicked(seasons, seasonsFor(c.id));
   };
   renderSubs(v.subcategoryId);
   category.addEventListener('change', () => renderSubs(null));
@@ -104,31 +100,6 @@ $('fileInput').addEventListener('change', async (e) => {
   $('queueMsg').textContent = errors.join('；');
   renderQueue();
 });
-
-// 录入表单。onSaved 在保存成功后调用（从队列录入时删除队列记录）
-function renderPending(card, img, onSaved = () => {}, defaults = {}) {
-  const url = URL.createObjectURL(img.blob);
-  const fields = itemFields({ autoSeasons: true, ...defaults });
-  const msg = el('p', { className: 'error' });
-  const done = () => { URL.revokeObjectURL(url); card.remove(); };
-  const save = el('button', { type: 'button', className: 'primary', textContent: '保存' });
-  save.addEventListener('click', async () => {
-    const v = fields.values();
-    if (categoryError(v)) { msg.textContent = categoryError(v); return; }
-    try {
-      await store.add({ ...v, image: img.blob, hasAlpha: img.hasAlpha });
-      await onSaved();
-      done();
-      render();
-    } catch (err) { msg.textContent = `保存失败：${err.message}`; }
-  });
-  const hint = img.hasAlpha ? el('p', { className: 'muted', textContent: '已抠图（透明背景）' }) : '';
-  card.replaceChildren(
-    el('img', { src: url, alt: '', className: img.hasAlpha ? 'thumb alpha' : 'thumb' }),
-    hint, fields.node, msg,
-    el('div', { className: 'actions' }, save, el('button', { type: 'button', textContent: '放弃', onclick: done })),
-  );
-}
 
 // ---------- 衣橱 ----------
 function tile(item) {
@@ -190,7 +161,6 @@ function openEdit(item) {
 // ---------- 抠图队列 ----------
 const fake = new URLSearchParams(location.search).get('fakeMatting'); // 测试用，见 model-worker.js
 const qurls = new Set();
-const STATUS_TEXT = { pending: '待抠图', processing: '抠图中', cutout_done: '已抠图', cutout_failed: '抠图失败，用原图', skipped: '未抠图，用原图' };
 const duration = (ms) => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)} 分 ${s % 60} 秒`; };
 const progressText = (p) => `${p.phase === 'classify' ? `分类 ${p.classifyProcessed} / ${p.total}（失败 ${p.classifyFailed}）` : `抠图 ${p.processed} / ${p.total}（失败 ${p.failed}）`} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}`;
 
@@ -229,39 +199,118 @@ async function renderQueue() {
   }
   const waiting = queue.filter((r) => r.status === 'pending' || r.classify?.status === 'pending').length;
   const p = job?.endedAt ? summarize(job, queue) : null;
+  const cards = queue.map(reviewCard);
+  const ready = () => cards.filter((c) => c.choice());
+  // 全部确认：只确认已有分类的；没有分类建议、又没手动选的留在列表里
+  const confirmAll = queueButton('全部确认', async () => {
+    let n = 0;
+    for (const c of ready()) { try { await c.confirm(); n++; } catch (err) { c.showError(err.message); } }
+    const left = (await store.listQueue()).length;
+    await renderQueue();
+    render();
+    // 写在列表外面：全部录入后列表会消失
+    $('queueMsg').textContent = `已录入 ${n} 件${left ? `，还有 ${left} 张需要先选分类` : ''}`;
+  }, 'primary');
   box.replaceChildren(...(queue.length ? [el('section', { className: 'card' },
-    el('h2', { textContent: `待录入 · ${queue.length}` }),
+    el('h2', { textContent: `待确认 · ${queue.length}` }),
     p ? el('p', { className: 'muted', id: 'lastJob', textContent: `上次抠图：成功 ${p.done}，失败 ${p.failed}，取消 ${p.skipped} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}${p.backend ? ` · ${p.backend}` : ''} · 分类 ${p.classified} 张，失败 ${p.classifyFailed}` }) : '',
     p ? timeline(job) : '',
     waiting ? el('div', { className: 'actions' },
       queueButton(`开始处理（${waiting} 张）`, async () => { await startJob(store); location.reload(); }, 'primary')) : '',
-    el('div', { className: 'grid' }, ...queue.map(queueTile)))] : []));
+    queue.some((r) => r.classify?.status === 'done') ? el('div', { className: 'actions' }, confirmAll) : '',
+    el('div', { className: 'reviews' }, ...cards.map((c) => c.node)))] : []));
 }
 
-function queueTile(r) {
-  const blob = r.cutout ?? r.original; // 录入用原尺寸
-  const u = URL.createObjectURL(r.thumb ?? blob); qurls.add(u); // 显示用缩略图
-
-  const alpha = r.status === 'cutout_done';
-  const best = r.classify?.status === 'done' ? r.classify.top3[0] : null;
-  const actions = [];
-  if (r.status !== 'pending') {
-    actions.push(queueButton('录入', () => {
-      const card = el('article', { className: 'pending card' });
-      $('pending').append(card);
-      // 用分类建议预填分类和季节（2b 第 4 步换成待确认列表）
-      const guess = best ? split(best.id) : null;
-      const defaults = guess ? { ...guess, seasons: seasonsFor(guess.categoryId, guess.subcategoryId) } : {};
-      renderPending(card, { blob, hasAlpha: alpha }, async () => { await store.removeQueued(r.id); renderQueue(); }, defaults);
-      card.scrollIntoView({ behavior: 'smooth' });
-    }, 'primary'));
+// 待确认卡片：缩略图（可看原图）、建议分类 + 另外 2 个候选、其他分类、季节、"用原图"、确认 / 删除。
+// 返回 { node, choice()（当前选的分类，没选为 null）, confirm(), showError() }
+function reviewCard(r) {
+  const thumbUrl = URL.createObjectURL(r.thumb ?? r.cutout ?? r.original); qurls.add(thumbUrl);
+  const cut = r.status === 'cutout_done';
+  const node = el('article', { className: 'review' });
+  node.dataset.id = r.id;
+  if (r.status === 'pending' || r.status === 'processing') {
+    node.append(el('img', { src: thumbUrl, alt: '' }), el('p', { className: 'status', textContent: '待处理' }),
+      queueButton('删除', async () => { await store.removeQueued(r.id); renderQueue(); }));
+    return { node, choice: () => null, confirm: async () => {}, showError: () => {} };
   }
-  actions.push(queueButton('删除', async () => { await store.removeQueued(r.id); renderQueue(); }));
-  return el('div', { className: 'tile queued' },
-    el('img', { src: u, alt: '', className: alpha ? 'alpha' : '' }),
-    el('span', { className: `status ${r.status}`, textContent: STATUS_TEXT[r.status] }),
-    best ? el('span', { className: 'guess', textContent: `${labelOf(best.id)} ${Math.round(best.score * 100)}%` }) : '',
-    el('div', { className: 'actions' }, ...actions));
+
+  // 当前选择：默认是分类建议的第一名
+  const top3 = r.classify?.status === 'done' ? r.classify.top3 : [];
+  let choice = top3[0] ? split(top3[0].id) : null;
+  let useOriginal = false;
+  const msg = el('p', { className: 'error' });
+
+  // 图片：缩略图；"看原图"时临时显示原图（只在点开时解码）
+  const img = el('img', { src: thumbUrl, alt: '', className: cut ? 'alpha' : '' });
+  let origUrl = null;
+  const flip = cut && !r.hasAlpha ? queueButton('看原图', () => {
+    const showOrig = flip.textContent === '看原图';
+    if (showOrig && !origUrl) { origUrl = URL.createObjectURL(r.original); qurls.add(origUrl); }
+    img.src = showOrig ? origUrl : thumbUrl;
+    img.className = showOrig ? '' : 'alpha';
+    flip.textContent = showOrig ? '看抠图' : '看原图';
+  }, 'small') : '';
+
+  // 分类：候选（最多 3 个）+ "其他分类"展开两级选择
+  const seasons = chips('seasons', SEASONS, choice ? seasonsFor(choice.categoryId, choice.subcategoryId) : [], true);
+  const pick = (c) => {
+    choice = c;
+    setPicked(seasons, seasonsFor(c.categoryId, c.subcategoryId)); // 换分类时季节回到默认值
+    renderChoice();
+  };
+  const candidates = el('div', { className: 'chips' });
+  const other = el('div', { className: 'other', hidden: true });
+  const label = el('p', { className: 'choice' });
+  const renderChoice = () => {
+    label.textContent = choice ? labelOf(choice.subcategoryId ?? choice.categoryId) : '请选择分类';
+    candidates.replaceChildren(...top3.map((t) => {
+      const b = el('button', { type: 'button', className: 'chip', textContent: `${labelOf(t.id)} ${Math.round(t.score * 100)}%` });
+      b.setAttribute('aria-pressed', String((choice?.subcategoryId ?? choice?.categoryId) === t.id));
+      b.addEventListener('click', () => pick(split(t.id)));
+      return b;
+    }));
+  };
+  const otherBtn = queueButton('其他分类', () => {
+    other.hidden = !other.hidden;
+    if (other.hidden) return;
+    // 一级 → 细分；没有细分的一级直接选中
+    const cats = chips('category', CATEGORIES.map((c) => ({ value: c.id, label: c.zh })), [], false);
+    const subs = el('div');
+    cats.addEventListener('change', () => {
+      const c = getNode(picked(cats)[0]);
+      if (!c.subs.length) { pick({ categoryId: c.id, subcategoryId: null }); subs.replaceChildren(); return; }
+      const box = chips('subcategory', c.subs.map((x) => ({ value: x.id, label: x.zh })), [], false);
+      box.addEventListener('change', () => pick({ categoryId: c.id, subcategoryId: picked(box)[0] }));
+      subs.replaceChildren(box);
+    });
+    other.replaceChildren(cats, subs);
+  }, 'small');
+  renderChoice();
+
+  // 抠图成功时可以选"用原图"（确认后只存原图）；抠图失败时提示用照片 App 抠图
+  const orig = cut && !r.hasAlpha ? el('label', { className: 'toggle-inline' },
+    Object.assign(el('input', { type: 'checkbox' }), { onchange: (e) => { useOriginal = e.target.checked; } }), ' 用原图') : '';
+  const hint = r.status === 'cutout_failed' || r.status === 'skipped'
+    ? el('p', { className: 'hint', textContent: `${r.status === 'skipped' ? '没有抠图' : '抠图失败'}，将保存原图。也可以用照片 App 抠图（长按衣服 → 共享 → 保存图像）后重新上传。` })
+    : '';
+  const noGuess = !top3.length ? el('p', { className: 'muted', textContent: '没有分类建议，请点"其他分类"手动选择' }) : '';
+
+  async function confirm() {
+    if (!choice) throw new Error('请先选择分类');
+    await store.confirmQueued(r.id, { ...choice, seasons: picked(seasons), useOriginal });
+  }
+  node.append(
+    el('div', { className: 'review-img' }, img, flip),
+    el('div', { className: 'review-body' },
+      label, candidates, noGuess, otherBtn, other,
+      el('div', { className: 'field' }, el('span', { textContent: '季节' }), seasons),
+      orig, hint, msg,
+      el('div', { className: 'actions' },
+        queueButton('确认', async () => {
+          try { await confirm(); renderQueue(); render(); } catch (err) { msg.textContent = err.message; }
+        }, 'primary'),
+        queueButton('删除', async () => { await store.removeQueued(r.id); renderQueue(); }))));
+  return { node, choice: () => choice, confirm, showError: (m) => { msg.textContent = m; } };
 }
 
 // 处理中保持屏幕常亮；切到后台会自动释放，回到前台再申请

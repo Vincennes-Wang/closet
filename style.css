@@ -62,10 +62,22 @@ label.primary { display: block; text-align: center; padding: 14px; font-size: 17
 .queued .actions button { padding: 4px 8px; font-size: 13px; }
 .status { font-size: 12px; color: var(--muted); }
 .status.cutout_failed, .status.skipped { color: var(--danger); }
-.guess { font-size: 13px; font-weight: 600; }
+/* 待确认卡片：左图右信息，窄屏也保持左右排 */
+.reviews { display: grid; gap: 10px; }
+.review { display: grid; grid-template-columns: 112px 1fr; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.review > img, .review-img img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 8px; }
+.review-img { display: grid; gap: 4px; align-content: start; }
+.review-body { display: grid; gap: 8px; align-content: start; min-width: 0; }
+.review .choice { margin: 0; font-size: 18px; font-weight: 600; }
+.review .chip { font-size: 13px; padding: 4px 10px; }
+.review .actions { margin-top: 0; }
+.review .other { display: grid; gap: 6px; }
+button.small { font-size: 13px; padding: 4px 10px; justify-self: start; }
+.toggle-inline { font-size: 14px; }
+.toggle-inline input { accent-color: var(--azul); }
 /* 抠图进行中只显示进度，不渲染衣橱，少占内存 */
 body.processing #addLabel, body.processing #closet, body.processing #empty,
-body.processing .toggle, body.processing #archived, body.processing #pending { display: none; }
+body.processing .toggle, body.processing #archived { display: none; }
 details { margin-top: 24px; font-size: 14px; }
 summary { cursor: pointer; color: var(--muted); }
 
