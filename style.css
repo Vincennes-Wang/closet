@@ -1,27 +1,38 @@
+/* 阿根廷蓝白：天蓝 = 国旗条纹；深蓝 = 操作按钮（白字对比 7:1）；金色只用在页头的五月太阳 */
 :root {
-  --bg: #f6f3ee; --card: #fff; --ink: #2b2620; --muted: #8a8177; --line: #e4ddd3;
-  --accent: #3d5a4a; --danger: #a33a2c;
+  --celeste: #74acdf; --celeste-soft: #e4f0fa; --azul: #1f5a8e; --ink: #15304d; --muted: #566c84;
+  --line: #d3e2ef; --bg: #f3f7fb; --card: #fff; --sol: #f6b40e; --sol-edge: #85340a; --danger: #b3261e;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
   color: var(--ink); background: var(--bg);
 }
 * { box-sizing: border-box; }
-body { margin: 0; padding: env(safe-area-inset-top) 16px calc(24px + env(safe-area-inset-bottom)); max-width: 720px; margin-inline: auto; }
-header { padding: 16px 0 8px; }
-h1 { margin: 0; font-size: 28px; }
-h2 { font-size: 16px; margin: 20px 0 8px; }
+body { margin: 0; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); max-width: 720px; margin-inline: auto; }
+
+/* 页头 = 简化的国旗：上下天蓝条，中间白底放太阳和标题，通栏 */
+header {
+  margin: 0 calc(50% - 50vw) 16px; padding: calc(26px + env(safe-area-inset-top)) 16px 26px; text-align: center;
+  background: linear-gradient(var(--celeste) 0 0) top / 100% calc(12px + env(safe-area-inset-top)) no-repeat,
+              linear-gradient(var(--celeste) 0 0) bottom / 100% 12px no-repeat, #fff;
+}
+h1 { margin: 0; font-size: 30px; font-weight: 600; letter-spacing: .12em; display: inline-flex; align-items: center; gap: 10px; }
+h1 svg { width: 34px; height: 34px; flex: none; }
+header .muted { margin: 4px 0 0; }
+h2 { font-size: 16px; margin: 22px 0 8px; color: var(--ink); }
 .muted { color: var(--muted); font-size: 13px; }
 .error { color: var(--danger); font-size: 14px; min-height: 0; margin: 4px 0; }
 .error:empty { display: none; }
-.hint { background: #fff6dd; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+.hint { background: var(--celeste-soft); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+a { color: var(--azul); }
 
 button, .primary { font: inherit; font-size: 15px; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 10px; padding: 8px 14px; cursor: pointer; }
-.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button:focus-visible, .primary:focus-within, input:focus-visible, summary:focus-visible { outline: 2px solid var(--azul); outline-offset: 2px; }
+.primary { background: var(--azul); color: #fff; border-color: var(--azul); }
 .danger { color: var(--danger); border-color: var(--danger); }
-label.primary { display: block; text-align: center; padding: 14px; font-size: 17px; margin: 8px 0 16px; }
+label.primary { display: block; text-align: center; padding: 14px; font-size: 17px; font-weight: 600; margin: 0 0 16px; }
 
-.card { background: var(--card); border-radius: 14px; padding: 12px; margin-bottom: 12px; box-shadow: 0 1px 2px rgb(0 0 0 / 6%); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 12px; }
 /* 透明图配棋盘格背景，一眼看出是否已抠图 */
-.alpha { background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0 / 16px 16px; }
+.alpha { background: repeating-conic-gradient(var(--celeste-soft) 0 25%, #fff 0 50%) 0 0 / 16px 16px; }
 .thumb { display: block; max-width: 100%; max-height: 260px; margin: 0 auto 8px; border-radius: 8px; }
 
 .fields { display: grid; gap: 10px; }
@@ -29,18 +40,20 @@ label.primary { display: block; text-align: center; padding: 14px; font-size: 17
 .field input { font: inherit; font-size: 16px; color: var(--ink); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { padding: 6px 12px; border-radius: 999px; font-size: 14px; }
-.chip[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.chip[aria-pressed="true"] { background: var(--celeste); color: var(--ink); border-color: var(--celeste); font-weight: 600; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
 .tile { display: grid; gap: 4px; padding: 6px; border-radius: 12px; font-size: 13px; text-align: center; }
+.tile:active { border-color: var(--celeste); }
 .tile img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 8px; }
 .tile span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .toggle { display: block; margin: 24px 0 8px; font-size: 14px; color: var(--muted); }
+.toggle input { accent-color: var(--azul); }
 #archived .tile { opacity: .6; }
 details { margin-top: 24px; font-size: 14px; }
 summary { cursor: pointer; color: var(--muted); }
 
-dialog { border: none; border-radius: 16px; padding: 16px; width: min(560px, 94vw); max-height: 90vh; }
-dialog::backdrop { background: rgb(0 0 0 / 35%); }
+dialog { border: none; border-radius: 16px; padding: 16px; width: min(560px, 94vw); max-height: 90vh; color: var(--ink); }
+dialog::backdrop { background: rgb(21 48 77 / 40%); }
