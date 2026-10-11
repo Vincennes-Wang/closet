@@ -1,7 +1,7 @@
 # PROGRESS
 - 状态：进行中
 - 当前阶段：阶段 1 — 应用骨架 + 手动录入（已验收）；下一阶段待定
-- 累计用时：8
+- 累计用时：8.5
 - 线上地址：https://vincennes-wang.github.io/closet/（应用）、https://vincennes-wang.github.io/closet/spike/（阶段 0 验证页）
 
 ## 阶段 0 总结（2026-10-11 结束）
@@ -14,7 +14,15 @@
   - 分类模型用 fashionSigLIP q4f16，只加载图像模型，在 Worker 中运行（阶段 5 接入）。
 - 详细测试记录见文末"阶段 0 详细记录"。
 
-## 最近一次工作（2026-10-11，配色 + 编辑保存 bug + 系统抠图更正）
+## 最近一次工作（2026-10-11，iPhone 验收 + 焦点圈 bug）
+- 完成：
+  - 用户 iPhone 验收：编辑保存后图片正常。"关于"区诊断：透明图存 PNG（`toBlob('image/webp')` 输出 `image/png`），与之前记录一致。
+  - 修 bug：打开编辑弹窗时"上衣"按钮外有一圈。原因已确认：`showModal()` 默认聚焦弹窗里第一个按钮（"上衣"），Safari / iOS 给它画焦点圈（`:focus-visible` 为 true；Chrome 为 false，所以不显示）。修法：弹窗加 `tabindex="-1"`，打开后 `dialog.focus()`，弹窗本身不画外框。缓存名升到 `closet-v4`。
+- 验证结果：
+  - `node --test tests/*.test.mjs` 8/8 通过。新增断言"打开编辑时焦点在弹窗上"；撤掉修复时该断言失败（actual ''，expected 'editDialog'），说明能抓到回归。
+  - Mac Safari 27.0.1（iframe 驱动真实应用）：修复前焦点在"上衣"、`focusVisible=true`；修复后焦点在弹窗。
+
+### 上一次（2026-10-11，配色 + 编辑保存 bug + 系统抠图更正）
 - 完成：
   - 修 bug：Safari 上编辑衣物点"保存"后图片不显示。原因已确认：Safari 把从 IndexedDB 读出的 Blob 原样 put 回去后，本次会话里这条记录的图片读不出来（`arrayBuffer()` 报 "The object can not be found here"，图片 URL 加载失败；刷新后恢复，数据没丢）。Chrome 不复现。修法：`store.update()` 先把图片复制成新 Blob 再写入。归档/恢复也走这里，一起修好。
     - 排除的假设：先撤销旧 object URL 导致新 URL 失效（改了顺序仍复现，已撤回）。
@@ -26,8 +34,8 @@
   - 390×844 截图检查首页和编辑弹窗。
 
 ## 下次从这里继续
-1. 用户在 iPhone 上验收：配色、编辑保存后图片正常（含系统抠图得到的透明 PNG）。
-2. 确定下一阶段：搭配，或导出/导入（按总计划）。
+1. iPhone 确认：点开衣物不再有圈；配色满意与否。
+2. 下一阶段建议先做导出/导入（备份），再做搭配。理由：数据只在本机浏览器里，删主屏幕图标或换手机就会丢；有了备份才能放心换新图标、继续录入。总计划在 Claude.ai，阶段编号以那边为准。
 3. 阶段 5 抠图按钮：每批张数（3 张）在 iPhone 上只抠图时第 3 张崩溃，接入时先验证每批 2 张还是 3 张。
 
 ## 未解决问题

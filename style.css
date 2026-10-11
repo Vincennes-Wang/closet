@@ -56,4 +56,5 @@ details { margin-top: 24px; font-size: 14px; }
 summary { cursor: pointer; color: var(--muted); }
 
 dialog { border: none; border-radius: 16px; padding: 16px; width: min(560px, 94vw); max-height: 90vh; color: var(--ink); }
+dialog:focus { outline: none; }
 dialog::backdrop { background: rgb(21 48 77 / 40%); }

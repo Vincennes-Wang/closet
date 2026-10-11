@@ -152,6 +152,7 @@ function openEdit(item) {
     el('div', { className: 'actions' }, ...buttons, el('button', { type: 'button', textContent: '取消', onclick: () => dialog.close() })),
   );
   dialog.showModal();
+  dialog.focus(); // showModal 默认聚焦第一个按钮（"上衣"），iOS 会在它外面画焦点圈
 }
 
 // ---------- 存储状态、诊断 ----------

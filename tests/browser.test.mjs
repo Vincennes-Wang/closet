@@ -117,6 +117,8 @@ test('应用：录入 2 件（透明 PNG、无透明 JPEG），刷新后仍在�
 
   // 编辑：改颜色；归档后衣橱只剩 1 件，已归档区可见
   await chrome.evaluate(`document.querySelector('#closet .tile').click()`);
+  // 打开编辑时焦点在弹窗本身，不在"上衣"按钮上（iOS 会画焦点圈）
+  assert.equal(await chrome.evaluate(`document.activeElement.id`), 'editDialog');
   await chrome.evaluate(`(() => { const i = document.querySelectorAll('#editForm input')[2]; i.value = '藏青'; })()`);
   await chrome.evaluate(`[...document.querySelectorAll('#editForm button')].find((b) => b.textContent === '保存').click()`);
   await chrome.waitFor(`!document.getElementById('editDialog').open`);
