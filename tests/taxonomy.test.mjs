@@ -1,0 +1,71 @@
+// taxonomy.js 的规则，以及 label-embeddings.json 是否与它一致
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { CATEGORIES, leaves, split, seasonsFor, isValidPair, visibleTaxonomy, labelOf } from '../taxonomy.js';
+import { SEASONS } from '../options.js';
+
+test('id 唯一，二级 id 以一级 id 开头，季节取值合法', () => {
+  const ids = CATEGORIES.flatMap((c) => [c.id, ...c.subs.map((s) => s.id)]);
+  assert.equal(new Set(ids).size, ids.length);
+  for (const c of CATEGORIES) {
+    for (const s of c.subs) assert.ok(s.id.startsWith(c.id + '.'), s.id);
+    for (const n of [c, ...c.subs]) for (const v of n.seasons ?? []) assert.ok(SEASONS.includes(v), `${n.id} ${v}`);
+  }
+});
+
+test('打分项：全部内置二级 + 没有二级的一级；每项都有英文 prompt', () => {
+  const l = leaves();
+  assert.equal(l.length, 29);
+  assert.ok(l.every((x) => x.en));
+  assert.deepEqual(l.filter((x) => !x.subcategoryId).map((x) => x.id), ['set', 'bag', 'accessory', 'hat']);
+  assert.deepEqual(split('top.cardigan_layer'), { categoryId: 'top', subcategoryId: 'top.cardigan_layer' });
+  assert.deepEqual(split('bag'), { categoryId: 'bag', subcategoryId: null });
+});
+
+test('季节规则按用户给的表', () => {
+  assert.deepEqual(seasonsFor('top', 'top.short_sleeve'), ['夏']);
+  assert.deepEqual(seasonsFor('top', 'top.cardigan_layer'), ['春', '秋']);
+  assert.deepEqual(seasonsFor('bottom', 'bottom.jeans'), ['春', '秋', '冬']);
+  assert.deepEqual(seasonsFor('outer', 'outer.wool_coat'), ['冬']);
+  assert.deepEqual(seasonsFor('skirt', 'skirt.dress'), ['春', '夏', '秋']);
+  assert.deepEqual(seasonsFor('shoes', 'shoes.sandals'), ['夏']);
+});
+
+test('isValidPair：有二级的必须选它下面的二级，没有二级的必须为 null', () => {
+  assert.equal(isValidPair('top', 'top.shirt'), true);
+  assert.equal(isValidPair('top', null), false);
+  assert.equal(isValidPair('top', 'bottom.jeans'), false);
+  assert.equal(isValidPair('bag', null), true);
+  assert.equal(isValidPair('bag', 'top.shirt'), false);
+  assert.equal(isValidPair('top.shirt', null), false);
+  assert.equal(isValidPair('nope', null), false);
+});
+
+test('visibleTaxonomy：内置 + 自建 − 隐藏，改名只改显示名', () => {
+  const rows = [
+    { id: 'top.tank', hidden: true },
+    { id: 'top.shirt', zh: '衬衣' },
+    { id: 'u1', parentId: 'top', zh: 'polo', builtin: false },
+    { id: 'u2', parentId: null, zh: '泳衣', builtin: false },
+  ];
+  const v = visibleTaxonomy(rows);
+  const top = v.find((c) => c.id === 'top');
+  assert.ok(!top.subs.some((s) => s.id === 'top.tank'));
+  assert.equal(top.subs.find((s) => s.id === 'top.shirt').zh, '衬衣');
+  assert.equal(top.subs.at(-1).id, 'u1');
+  assert.equal(v.at(-1).zh, '泳衣');
+  assert.equal(labelOf('top.shirt', rows), '衬衣');
+  assert.equal(labelOf('top.shirt'), '衬衫');
+});
+
+test('label-embeddings.json 与 taxonomy.js 一致（改了 prompt 要运行 node tools/embed.mjs）', () => {
+  const file = JSON.parse(readFileSync(new URL('../label-embeddings.json', import.meta.url)));
+  assert.deepEqual(file.labels.map((l) => [l.id, l.en]), leaves().map((l) => [l.id, l.en]));
+  assert.equal(file.textDtype, 'fp32');
+  for (const l of file.labels) {
+    assert.equal(l.embedding.length, 768);
+    const norm = Math.hypot(...l.embedding);
+    assert.ok(Math.abs(norm - 1) < 1e-3, `${l.id} 范数 ${norm}`);
+  }
+});

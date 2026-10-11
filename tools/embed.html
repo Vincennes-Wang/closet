@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>生成标签向量</title>
+<p id="status">计算中…</p>
+<script type="module">
+// 由 tools/embed.mjs 打开。用 fashionSigLIP fp32 文本模型给 taxonomy.js 的每个打分项算向量
+import { env, AutoTokenizer, SiglipTextModel } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
+import { leaves } from '/taxonomy.js';
+import { CLASSIFY_MODEL } from '/config.js';
+env.allowLocalModels = false;
+try {
+  const device = (await navigator.gpu?.requestAdapter()) ? 'webgpu' : 'wasm';
+  const tokenizer = await AutoTokenizer.from_pretrained(CLASSIFY_MODEL.id);
+  const text = await SiglipTextModel.from_pretrained(CLASSIFY_MODEL.id, { device, dtype: 'fp32' });
+  const items = leaves();
+  const inputs = tokenizer(items.map((l) => l.en), { padding: 'max_length', truncation: true });
+  const { text_embeds } = await text(inputs);
+  const vectors = text_embeds.normalize().tolist();
+  window.__result = {
+    model: CLASSIFY_MODEL.id, textDtype: 'fp32', device, transformersJs: '4.3.1', createdAt: new Date().toISOString(),
+    note: '由 node tools/embed.mjs 生成，不要手改。改了 taxonomy.js 的英文 prompt 后重新生成。',
+    labels: items.map((l, i) => ({ id: l.id, en: l.en, embedding: vectors[i].map((v) => +v.toFixed(5)) })),
+  };
+  document.getElementById('status').textContent = `完成：${items.length} 项`;
+} catch (err) {
+  window.__result = { error: String(err?.message ?? err) };
+}
+</script>
