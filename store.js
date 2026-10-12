@@ -6,7 +6,7 @@ const DB_NAME = 'closet';
 const DB_VERSION = 3;
 const STORE = 'items';
 const QUEUE = 'queue'; // 选进来、还没确认录入的照片（抠图、分类都在这里做）
-const META = 'meta'; // 键值：job = 处理任务状态
+const META = 'meta'; // 键值：job = 处理任务状态，device = 本设备设置
 const CATS = 'categories'; // 用户自建分类，以及对内置分类的改名、隐藏（界面在阶段 4）
 
 // 队列记录的抠图状态。processing 只在处理那一张时出现；页面加载时还看到它，说明上次处理到这张时页面崩溃了
@@ -187,6 +187,13 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
     removeQueued: (id) => tx('readwrite', (os) => req(os.delete(id)), QUEUE),
 
     // ---------- 任务状态 ----------
+    // 本设备的设置（meta 的 device 键），例如 { mattingNoWebgpu: true }。不随任务清空
+    getDevice: async () => (await tx('readonly', (os) => req(os.get('device')), META)) ?? {},
+    setDevice: (patch) => tx('readwrite', async (os) => {
+      const next = { ...((await req(os.get('device'))) ?? {}), ...patch };
+      os.put(next, 'device');
+      return next;
+    }, META),
     getJob: async () => (await tx('readonly', (os) => req(os.get('job')), META)) ?? null,
     // patch 可以是对象，也可以是 (当前 job) => 对象（读改写在同一个事务里，例如追加事件）
     async setJob(patch) {

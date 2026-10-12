@@ -36,5 +36,10 @@ export const RESULTS_DELAY_MS = 2000;
 // iPhone 三次验收共 4 次崩溃发生在"刷新后马上加载模型"时
 export const LOAD_DELAY_MS = 3000;
 
+// 抠图结果里不透明像素（alpha ≥ 128）少于这个比例，算遮罩为空。
+// 小米手机 WebGPU 抠图不报错但遮罩全空（2026-10-12），遇到时本设备改用 WASM（见 queue.js）
+export const EMPTY_MASK_RATIO = 0.01;
+export const EMPTY_MASK_ERROR = '遮罩为空，没有抠出衣服';
+
 // 同一张图失败（页面崩溃或模型报错）达到这个次数，标为抠图失败，保留原图
 export const MAX_ATTEMPTS = 2;

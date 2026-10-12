@@ -1,25 +1,29 @@
 // 模型 Worker：模型只在这里加载（做法来自 spike/rmbg-worker.js）。页面每批处理完就刷新，Worker 随页面销毁。
 // 一个 Worker 只做一种任务（task）：matting = 抠图（RMBG），classify = 分类（fashionSigLIP 图像模型）。
 // 消息：init（加载模型）/ run（处理一张，ImageBitmap 以 transfer 方式传入）/ dispose（释放 ONNX session）
-// 测试用：init 时 fake 为数字，则不加载模型，每张等待 fake 毫秒后返回假结果
-import { pickBackend } from './config.js';
+// 测试用：init 时 fake 为数字，则不加载模型，每张等待 fake 毫秒后返回假结果；fakeEmptyMask 为 true 时，非 WASM 后端输出全空遮罩
+import { pickBackend, EMPTY_MASK_RATIO, EMPTY_MASK_ERROR } from './config.js';
 const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
 let task = null, model = null, processor = null, spec = null, RawImage = null, fake = null, labels = null;
+let device = null, fakeEmptyMask = false;
 
 // labels：分类用的预计算标签向量 [{ id, embedding }]（label-embeddings.json）
-async function init({ task: initTask = 'matting', modelId, dtype, wasmDtype, input, output, config, labels: l, fake: f }) {
+// noWebgpu：本设备 WebGPU 抠图结果不可用，只用 WASM（见 queue.js）
+async function init({ task: initTask = 'matting', modelId, dtype, wasmDtype, input, output, config, labels: l, fake: f, noWebgpu = false, fakeEmptyMask: fe = false }) {
   task = initTask; spec = { input, output }; labels = l ?? null;
-  if (typeof f === 'number') { fake = f; return { device: 'fake', dtype: 'fake', loadMs: 0 }; }
+  if (typeof f === 'number') { fake = f; fakeEmptyMask = fe; device = noWebgpu ? 'wasm' : 'fake'; return { device, dtype: 'fake', loadMs: 0 }; }
   const t = await import(TRANSFORMERS);
   t.env.allowLocalModels = false;
   RawImage = t.RawImage;
   // Worker 里没有 WebGPU、或显卡不支持 fp16 时回退 WASM（见 config.js pickBackend），并把实际后端报告给主线程
   const gpu = { webgpu: false, shaderF16: false };
-  try {
+  if (!noWebgpu) try {
     const adapter = await navigator.gpu?.requestAdapter();
     if (adapter) { gpu.webgpu = true; gpu.shaderF16 = adapter.features.has('shader-f16'); }
   } catch { /* 无 */ }
-  const { device, dtype: realDtype } = pickBackend(gpu, { dtype, wasmDtype });
+  const picked = pickBackend(gpu, { dtype, wasmDtype });
+  device = picked.device;
+  const realDtype = picked.dtype;
   const t0 = performance.now();
   const opts = { device, dtype: realDtype, ...(config ? { config } : {}) };
   model = task === 'classify' ? await t.SiglipVisionModel.from_pretrained(modelId, opts) : await t.AutoModel.from_pretrained(modelId, opts);
@@ -37,8 +41,16 @@ function bitmapToCanvas(bitmap) {
 
 async function runFake(canvas) {
   await new Promise((ok) => setTimeout(ok, fake));
-  canvas.getContext('2d').clearRect(0, 0, canvas.width / 2, canvas.height / 2);
-  return canvas.convertToBlob({ type: 'image/png' });
+  const empty = fakeEmptyMask && device !== 'wasm';
+  canvas.getContext('2d').clearRect(0, 0, empty ? canvas.width : canvas.width / 2, empty ? canvas.height : canvas.height / 2);
+}
+
+// 不透明像素太少：遮罩为空（小米手机 WebGPU），报错让队列处理
+function checkNotEmpty(ctx, w, h) {
+  const { data } = ctx.getImageData(0, 0, w, h);
+  let n = 0;
+  for (let i = 3; i < data.length; i += 4) if (data[i] >= 128) n++;
+  if (n < w * h * EMPTY_MASK_RATIO) throw new Error(EMPTY_MASK_ERROR);
 }
 
 // 抠图结果的缩略图（透明 PNG，长边 side）
@@ -58,7 +70,9 @@ async function runMatting(bitmap, thumbSide) {
   const temps = []; // 本张产生的所有张量，结束时统一 dispose
   try {
     if (fake !== null) {
-      const cutout = await runFake(canvas);
+      await runFake(canvas);
+      checkNotEmpty(canvas.getContext('2d'), w, h);
+      const cutout = await canvas.convertToBlob({ type: 'image/png' });
       return { cutout, thumb: await thumbOf(canvas, thumbSide), ms: Math.round(performance.now() - t0) };
     }
     const { pixel_values } = await processor(RawImage.fromCanvas(canvas).rgb());
@@ -75,6 +89,7 @@ async function runMatting(bitmap, thumbSide) {
     const ch = mask.channels;
     for (let i = 0; i < w * h; i++) img.data[i * 4 + 3] = mask.data[i * ch];
     ctx.putImageData(img, 0, 0);
+    checkNotEmpty(ctx, w, h);
     const cutout = await canvas.convertToBlob({ type: 'image/png' });
     return { cutout, thumb: await thumbOf(canvas, thumbSide), ms: Math.round(performance.now() - t0) };
   } finally {

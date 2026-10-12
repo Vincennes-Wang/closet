@@ -14,6 +14,14 @@
   - iOS 系统抠图：2026-10-11 先否决，同日更正为可行的备选（照片长按 → 共享 → 保存图像）。
 - 详细测试记录见文末"阶段 0 详细记录"。
 
+## 最近一次工作（2026-10-12，小米手机：空遮罩时改用 WASM）
+- 用户改为要修小米（上一条修复只针对 360，小米支持 fp16、不报错，所以没变）。
+- 做法：抠图结果中不透明像素少于 1%（`config.js` `EMPTY_MASK_RATIO`）算遮罩为空，Worker 报错。用 WebGPU 时遇到空遮罩：本设备记住 `mattingNoWebgpu`（IndexedDB `meta.device`，不随任务清空），这张算失败一次，刷新后用 WASM 重抠；以后的任务也直接用 WASM。用 WASM 仍为空遮罩时按普通失败处理，2 次后保留原图（不会再出现只有黑白格的图）。时间线记"第 N 张遮罩为空，本设备以后改用 WASM 抠图"。缓存名 `closet-v16`。
+- 验证结果：
+  - `node --test tests/*.test.mjs` 23/23 通过。新增浏览器测试（`?fakeEmptyMask=1` 模拟小米）：先写，确认失败后才写修复。覆盖：第 1 张 WebGPU 空遮罩 → WASM 重抠成功、结果图不透明比例 > 50%、下一个任务直接用 WASM。
+  - `node tools/eval.mjs` 真模型（Mac Chrome WebGPU）22 张样本：没有一张被误判为空遮罩；分类 top-1 20/22。
+  - 小米真机：待用户验证。
+
 ## 最近一次工作（2026-10-12，电脑 360 浏览器加载抠图模型失败）
 - 现象：第一次报 "Failed to fetch dynamically imported module"，第二次报 "The device (webgpu) does not support fp16"。
 - 错误 2 已确认原因并修复：transformers.js 4.3.1 用 WebGPU + fp16 前检查显卡是否支持 `shader-f16`，不支持就报错。我们原来只判断"有没有 WebGPU"。现在 `config.js` `pickBackend()` 一起检查：fp16 / q4f16 模型遇到不支持 fp16 的显卡时改用 WASM（抠图 quantized，分类 int8）。不用 WebGPU fp32，因为小米上 WebGPU fp32 也抠不出图。缓存名 `closet-v15`。
@@ -197,14 +205,15 @@
   - 390×844 截图检查首页和编辑弹窗。
 
 ## 下次从这里继续
-1. 360 浏览器重试："上次抠图"那行最后应显示 `wasm/quantized`，图片里应有衣服。再看下面两个链接在中国能否打开：huggingface.co 上 RMBG-1.4 的 config.json、jsDelivr 上 transformers 的 package.json。打不开就要决定是否改用国内镜像（例如 hf-mirror.com）。
-2. 阶段 3 备份：Plan mode 给计划，用户确认后写代码。
-3. 下次 iPhone 录入时顺便看分类每页 6 张后是否还崩溃（看"详细记录"）。
-4. iPhone 看一眼页头文字和照片占用是否合理。
+1. 小米手机验证：录入 2–3 件，第 1 张会在时间线里记一次"遮罩为空，改用 WASM"，之后都有衣服；"上次抠图"那行最后显示 `wasm/quantized`。
+2. 360 浏览器重试（别人的电脑，方便时再做）："上次抠图"那行最后应显示 `wasm/quantized`，图片里应有衣服。再看下面两个链接在中国能否打开：huggingface.co 上 RMBG-1.4 的 config.json、jsDelivr 上 transformers 的 package.json。打不开就要决定是否改用国内镜像（例如 hf-mirror.com）。
+3. 阶段 3 备份：Plan mode 给计划，用户确认后写代码。
+4. 下次 iPhone 录入时顺便看分类每页 6 张后是否还崩溃（看"详细记录"）。
+5. iPhone 看一眼页头文字和照片占用是否合理。
 
 ## 未解决问题
 - 中国网络（2026-10-12）：huggingface.co、jsDelivr 能否访问未确认；360 浏览器第一次报 "Failed to fetch dynamically imported module"，原因未确认。
-- 小米手机 WebGPU 抠图结果全透明（2026-10-12，见上）：暂不修。以后要修的两个方案：遮罩几乎全空时判为抠图失败、保留原图；或检测到空遮罩后本设备改用 WASM。
+- 小米手机 WebGPU 抠图结果全透明（2026-10-12）：已修（空遮罩时本设备改用 WASM），待小米真机验证。
 - ~~iPhone 上偶发崩溃，需要左划~~ — 基本解决（2026-10-11）：抠图每批 1 张后抠图阶段 0 崩溃；分类阶段崩溃 1 次已自动恢复，每页改为 6 张，待下次录入时观察。
 - 交付前："关于"区的存图格式诊断（`app.js` `showDiag`）没必要就删除。
 - ~~没有可商用、在浏览器跑得通、效果合格的抠图模型~~ — 已决策（2026-10-10）：非商用定位，应用内用 RMBG-1.4，iOS 系统抠图保底。

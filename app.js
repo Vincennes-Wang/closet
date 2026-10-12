@@ -160,6 +160,7 @@ function openEdit(item) {
 
 // ---------- 抠图队列 ----------
 const fake = new URLSearchParams(location.search).get('fakeMatting'); // 测试用，见 model-worker.js
+const fakeEmptyMask = new URLSearchParams(location.search).has('fakeEmptyMask'); // 测试用：模拟 WebGPU 遮罩全空
 const qurls = new Set();
 const duration = (ms) => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)} 分 ${s % 60} 秒`; };
 const progressText = (p) => `${p.phase === 'classify' ? `分类 ${p.classifyProcessed} / ${p.total}（失败 ${p.classifyFailed}）` : `抠图 ${p.processed} / ${p.total}（失败 ${p.failed}）`} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}`;
@@ -367,6 +368,6 @@ if (!job?.running) {
 document.documentElement.dataset.ready = '1'; // 事件已绑定、衣橱已渲染（测试等这个标记）
 showDiag();
 if (job?.running) {
-  const result = await resumeQueue(store, { fake: fake === null ? null : Number(fake), onChange: renderQueue });
+  const result = await resumeQueue(store, { fake: fake === null ? null : Number(fake), fakeEmptyMask, onChange: renderQueue });
   if (result !== 'reloading') { await renderQueue(); if (result !== 'paused') await render(); }
 }

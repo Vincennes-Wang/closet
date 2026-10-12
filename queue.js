@@ -3,7 +3,7 @@
 // 原因：iPhone 上模型内存在页面生命周期内累积，终止 Worker 也不释放，只有刷新页面才能回到起点（阶段 0、2a 结论）。
 // 任务状态存在 IndexedDB 的 job 里，刷新或崩溃后从这里接着做。
 import {
-  MATTING_MODEL, MATTING_PER_LOAD, CLASSIFY_MODEL, CLASSIFY_PER_LOAD, MAX_ATTEMPTS, THUMB_SIDE, LOAD_DELAY_MS,
+  MATTING_MODEL, MATTING_PER_LOAD, CLASSIFY_MODEL, CLASSIFY_PER_LOAD, MAX_ATTEMPTS, THUMB_SIDE, LOAD_DELAY_MS, EMPTY_MASK_ERROR,
 } from './config.js';
 
 // 两段的差别都在这里：用哪个模型、每次加载几张、怎么判断"待处理 / 处理中"、怎么记成功和失败
@@ -98,6 +98,7 @@ const EVENT_TEXT = {
   crash: (v) => `发现第 ${v.i} 张${v.k === 'classify' ? '分类' : '处理'}时页面崩溃（第 ${v.attempts} 次）`,
   loadCrash: () => '发现加载模型时页面崩溃',
   crashIdle: () => '发现上个页面在两步之间崩溃',
+  noWebgpu: (v) => `第 ${v.i} 张遮罩为空，本设备以后改用 WASM 抠图`,
   reload: () => '自动刷新',
   dispose: (v) => `释放模型 ${v.ms} ms`,
   loadWait: (v) => `等待 ${v.ms} ms 再加载模型`,
@@ -141,7 +142,7 @@ const finish = (store) => store.setJob({ running: false, loading: false, endedAt
 
 // 页面加载时调用。onChange 在每张处理前后调用，用来刷新进度显示。
 // 返回 'idle' | 'paused' | 'reloading' | 'finished'
-export async function resumeQueue(store, { fake = null, onChange = () => {}, reload = () => location.reload() } = {}) {
+export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, onChange = () => {}, reload = () => location.reload() } = {}) {
   let job = await store.getJob();
   if (!job?.running) return 'idle';
   // 上一条不是"自动刷新"或"开始"，说明上个页面意外结束（崩溃或被关掉）
@@ -195,7 +196,9 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
     // 分类要用 Mac 上预先算好的标签向量
     const labels = P.task === 'classify' ? (await (await fetch(new URL('./label-embeddings.json', import.meta.url))).json()).labels : null;
     await store.setJob({ loading: true });
-    const ready = await workerCall(w, { type: 'init', task: P.task, ...P.model, modelId: P.model.id, labels, fake });
+    // 本设备 WebGPU 抠出过空遮罩（小米手机）：抠图只用 WASM
+    const noWebgpu = P.task === 'matting' && !!(await store.getDevice()).mattingNoWebgpu;
+    const ready = await workerCall(w, { type: 'init', task: P.task, ...P.model, modelId: P.model.id, labels, fake, fakeEmptyMask, noWebgpu });
     await store.setJob({ loading: false, loadCrashes: 0, [P.task === 'classify' ? 'classifyBackend' : 'backend']: `${ready.device}/${ready.dtype}` });
     await log(store, { e: 'model', k: P.task, ms: ready.loadMs });
 
@@ -212,6 +215,13 @@ export async function resumeQueue(store, { fake = null, onChange = () => {}, rel
         await log(store, { e: 'done', k: P.task, i: indexOf(job, r.id), ms: out.ms });
       } catch (err) {
         await P.fail(store, r.id, err.message);
+        // WebGPU 抠出空遮罩：记住本设备改用 WASM，刷新后重抠这张（这次算失败一次）
+        if (err.message === EMPTY_MASK_ERROR && ready.device !== 'wasm') {
+          await store.setDevice({ mattingNoWebgpu: true });
+          await log(store, { e: 'noWebgpu', i: indexOf(job, r.id) });
+          onChange();
+          break;
+        }
         await log(store, { e: 'error', k: P.task, i: indexOf(job, r.id), msg: err.message });
       }
       onChange();

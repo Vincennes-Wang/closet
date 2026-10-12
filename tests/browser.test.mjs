@@ -326,3 +326,48 @@ test('抠图队列：模型就绪后、开始处理前崩溃，也算一次崩�
   assert.deepEqual(st.job.events.filter((v) => v.e === 'crashIdle').length, 1);
   assert.deepEqual(st.statuses, ['cutout_done']);
 });
+
+// 小米手机（2026-10-12）：WebGPU 抠图不报错，但遮罩全空，结果全透明。
+// fakeEmptyMask=1：假模型在非 WASM 后端输出全空遮罩，模拟这种设备
+test('抠图队列：WebGPU 遮罩全空时，这台设备改用 WASM 重抠，以后的任务也用 WASM', async () => {
+  await resetDb();
+  const url = `${server.origin}/?fakeMatting=50&fakeEmptyMask=1`;
+  await chrome.goto(url);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  await chrome.evaluate(pickJpegs(2));
+  await chrome.waitFor(`document.querySelectorAll('#queue .review').length === 2`);
+  await chrome.evaluate(clickButton('#queue', '开始处理（2 张）'));
+  await chrome.waitFor(`document.getElementById('lastJob')`, 60000);
+  let st = await chrome.evaluate(QUEUE_STATE);
+  assert.deepEqual(st.statuses, ['cutout_done', 'cutout_done']);
+  assert.equal(st.attempts[0], 1); // 第 1 张在 WebGPU 上失败一次，换 WASM 后成功
+  assert.equal(st.job.backend, 'wasm/fake');
+  assert.equal(st.job.events.filter((v) => v.e === 'noWebgpu').length, 1);
+  assert.equal(st.job.recoveries, 0);
+  assert.match(await chrome.evaluate(`document.querySelector('#queue .timeline pre').textContent`), /第 1 张遮罩为空，本设备以后改用 WASM 抠图/);
+  // 抠图结果不是全透明
+  const opaque = await chrome.evaluate(`(async () => {
+    const { openStore } = await import('/store.js');
+    const s = await openStore(); const q = await s.listQueue(); s.close();
+    const b = await createImageBitmap(q[0].cutout); const c = new OffscreenCanvas(b.width, b.height);
+    const x = c.getContext('2d'); x.drawImage(b, 0, 0);
+    const d = x.getImageData(0, 0, b.width, b.height).data; let n = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i] >= 128) n++;
+    return n / (d.length / 4);
+  })()`);
+  assert.ok(opaque > 0.5, `不透明比例 ${opaque}`);
+
+  // 全部确认后再录 1 张：直接用 WASM，不再失败
+  await chrome.evaluate(clickButton('#queue', '全部确认'));
+  await chrome.waitFor(`document.querySelectorAll('#queue .review').length === 0`);
+  await chrome.evaluate(pickJpegs(1));
+  await chrome.waitFor(`document.querySelectorAll('#queue .review').length === 1`);
+  await chrome.evaluate(clickButton('#queue', '开始处理（1 张）'));
+  // 上一个任务的 #lastJob 还在，等新任务结束
+  await chrome.waitFor(`(${QUEUE_STATE}).then((s) => s.job.events[0].n === 1 && !s.job.running)`, 60000);
+  st = await chrome.evaluate(QUEUE_STATE);
+  assert.deepEqual(st.statuses, ['cutout_done']);
+  assert.equal(st.attempts[0], 0);
+  assert.equal(st.job.backend, 'wasm/fake');
+  assert.equal(st.job.events.filter((v) => v.e === 'noWebgpu').length, 0);
+});

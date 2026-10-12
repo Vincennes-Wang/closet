@@ -98,7 +98,7 @@
 - 图片存储格式：长边缩到 1024，不存原图。有透明区域的图存 WebP；浏览器不能输出带透明的 WebP 时存 PNG。没有透明区域的图存 JPEG 0.9。启动时用 `image.js` 的 `probeWebpAlpha()` 检测，结果显示在页面"关于"区。
 - WebP 透明实测：Mac Chrome 155 可以；Mac Safari 27.0.1 不可以（`toBlob('image/webp')` 返回 `image/png`），所以 Safari 上透明图存 PNG。iPhone（iOS 27，2026-10-11 真机）：同样返回 `image/png`，透明图存 PNG。
 - 衣物记录字段见 `store.js` 的 `newItem()`：分类只存 `categoryId`、`subcategoryId`（来自 `taxonomy.js`），季节、场景的取值在 `options.js`。改了取值要考虑已存数据。
-- `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v3：`items` 衣物、`queue` 待确认照片、`meta` 任务状态 `job`、`categories` 自建分类和改名/隐藏）。改表结构必须升版本号并写迁移。例外：v1 → v2、v2 → v3 经用户确认直接清空，不迁移。
+- `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v3：`items` 衣物、`queue` 待确认照片、`meta` 任务状态 `job` 和本设备设置 `device`、`categories` 自建分类和改名/隐藏）。改表结构必须升版本号并写迁移。例外：v1 → v2、v2 → v3 经用户确认直接清空，不迁移。
 - Service Worker 缓存名 `closet-vN`（`sw.js`）。改了任何应用文件，发布前把 N 加 1，否则用户手机上一直是旧版本。
 - Safari 坑（2026-10-11 确认）：从 IndexedDB 读出的 Blob 不能原样 put 回去，否则本次会话里该记录的图片读不出来（"The object can not be found here"，刷新后恢复）。`store.update()` 先复制成新 Blob 再写入。以后任何"读出再写回"带 Blob 的记录都要这样做。Chrome 不复现，只能在 Safari 验证。
 - Safari 坑二（2026-10-11 确认，2a）：记录被改写后，改写前读出的 Blob 也读不出来（`createImageBitmap` 报 "An error occured reading the Blob argument"）。改写记录后要用改写后的新 Blob（`queue.js` 用 `markProcessing()` 的返回值）。
@@ -106,7 +106,7 @@
 ### 阶段 2a 实现（2026-10-11）
 - 配置只在 `config.js`：`MATTING_MODEL`、`MATTING_PER_LOAD`（每次加载抠几张，2026-10-11 由 2 改为 1，见 PROGRESS.md）、`MAX_ATTEMPTS`（同一张失败几次标为失败，默认 2）。
 - `queue.js`：任务分两段（2b 起）：`phase = matting` 抠图，全部抠完刷新一次，`phase = classify` 分类（每次加载最多 `CLASSIFY_PER_LOAD` 张，2026-10-11 由 10 改为 6）。两段的差别都在 `PHASES` 里；等待、续传、崩溃恢复、时间线两段共用。队列记录的分类状态在 `classify` 字段（status、attempts、top3）。任务状态存 `meta.job`。页面加载时：`processing` 记录 = 上次崩溃，attempts+1；加载模型时连续崩溃 2 次自动暂停，防止无限刷新。
-- `model-worker.js`：抠图 Worker（复制自 `spike/rmbg-worker.js`）。后端由 `config.js` `pickBackend()` 选：没有 WebGPU，或 fp16 / q4f16 模型遇到显卡不支持 `shader-f16`（电脑 360 浏览器，2026-10-12），改用 WASM + `wasmDtype`。URL 加 `?fakeMatting=毫秒` 时不加载模型，测试用。
+- `model-worker.js`：抠图 Worker（复制自 `spike/rmbg-worker.js`）。后端由 `config.js` `pickBackend()` 选：没有 WebGPU，或 fp16 / q4f16 模型遇到显卡不支持 `shader-f16`（电脑 360 浏览器，2026-10-12），改用 WASM + `wasmDtype`。抠图结果不透明像素少于 `EMPTY_MASK_RATIO` 算空遮罩（小米手机 WebGPU，2026-10-12）：用 WebGPU 时本设备记住 `meta.device.mattingNoWebgpu`，刷新后用 WASM 重抠，以后也只用 WASM（`queue.js`）。测试用 `?fakeEmptyMask=1` 模拟。URL 加 `?fakeMatting=毫秒` 时不加载模型，测试用。
 - 全部抠完后再刷新一次，等 `RESULTS_DELAY_MS`（2 秒）再显示结果（iPhone 两次验收都在显示 12 张结果图时崩溃）。
 - 队列只显示缩略图（记录字段 `thumb`，长边 `THUMB_SIDE` = 256），"录入"时才用原尺寸。每批结束先 `dispose` 模型再结束 Worker、刷新。
 - 刷新后（任务第一次加载除外）等 `LOAD_DELAY_MS`（3 秒）再加载模型。iPhone 前三次验收 6 次崩溃里有 4 次在"刷新后马上加载模型"。
