@@ -329,7 +329,7 @@ test('抠图队列：模型就绪后、开始处理前崩溃，也算一次崩�
 
 // 小米手机（2026-10-12）：WebGPU 抠图不报错，但遮罩全空，结果全透明。
 // fakeEmptyMask=1：假模型在非 WASM 后端输出全空遮罩，模拟这种设备
-test('抠图队列：WebGPU 遮罩全空时，这台设备改用 WASM 重抠，以后的任务也用 WASM', async () => {
+test('抠图队列：WebGPU 遮罩全空时，这台设备改用 WASM 重抠，分类和以后的任务也用 WASM', async () => {
   await resetDb();
   const url = `${server.origin}/?fakeMatting=50&fakeEmptyMask=1`;
   await chrome.goto(url);
@@ -342,9 +342,10 @@ test('抠图队列：WebGPU 遮罩全空时，这台设备改用 WASM 重抠，�
   assert.deepEqual(st.statuses, ['cutout_done', 'cutout_done']);
   assert.equal(st.attempts[0], 1); // 第 1 张在 WebGPU 上失败一次，换 WASM 后成功
   assert.equal(st.job.backend, 'wasm/fake');
+  assert.equal(st.job.classifyBackend, 'wasm/fake'); // 分类也不用 WebGPU（小米 WebGPU 分类结果离谱）
   assert.equal(st.job.events.filter((v) => v.e === 'noWebgpu').length, 1);
   assert.equal(st.job.recoveries, 0);
-  assert.match(await chrome.evaluate(`document.querySelector('#queue .timeline pre').textContent`), /第 1 张遮罩为空，本设备以后改用 WASM 抠图/);
+  assert.match(await chrome.evaluate(`document.querySelector('#queue .timeline pre').textContent`), /第 1 张遮罩为空，本设备以后抠图和分类都改用 WASM/);
   // 抠图结果不是全透明
   const opaque = await chrome.evaluate(`(async () => {
     const { openStore } = await import('/store.js');
@@ -369,5 +370,6 @@ test('抠图队列：WebGPU 遮罩全空时，这台设备改用 WASM 重抠，�
   assert.deepEqual(st.statuses, ['cutout_done']);
   assert.equal(st.attempts[0], 0);
   assert.equal(st.job.backend, 'wasm/fake');
+  assert.equal(st.job.classifyBackend, 'wasm/fake');
   assert.equal(st.job.events.filter((v) => v.e === 'noWebgpu').length, 0);
 });

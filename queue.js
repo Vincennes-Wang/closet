@@ -98,7 +98,7 @@ const EVENT_TEXT = {
   crash: (v) => `发现第 ${v.i} 张${v.k === 'classify' ? '分类' : '处理'}时页面崩溃（第 ${v.attempts} 次）`,
   loadCrash: () => '发现加载模型时页面崩溃',
   crashIdle: () => '发现上个页面在两步之间崩溃',
-  noWebgpu: (v) => `第 ${v.i} 张遮罩为空，本设备以后改用 WASM 抠图`,
+  noWebgpu: (v) => `第 ${v.i} 张遮罩为空，本设备以后抠图和分类都改用 WASM`,
   reload: () => '自动刷新',
   dispose: (v) => `释放模型 ${v.ms} ms`,
   loadWait: (v) => `等待 ${v.ms} ms 再加载模型`,
@@ -196,8 +196,10 @@ export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, o
     // 分类要用 Mac 上预先算好的标签向量
     const labels = P.task === 'classify' ? (await (await fetch(new URL('./label-embeddings.json', import.meta.url))).json()).labels : null;
     await store.setJob({ loading: true });
-    // 本设备 WebGPU 抠出过空遮罩（小米手机）：抠图只用 WASM
-    const noWebgpu = P.task === 'matting' && !!(await store.getDevice()).mattingNoWebgpu;
+    // 本设备 WebGPU 抠出过空遮罩（小米手机）：抠图和分类都只用 WASM（小米 WebGPU 分类结果也离谱，2026-10-12 验证页实测）。
+    // mattingNoWebgpu 是 closet-v16 写的旧键名，照样认
+    const device = await store.getDevice();
+    const noWebgpu = !!(device.noWebgpu || device.mattingNoWebgpu);
     const ready = await workerCall(w, { type: 'init', task: P.task, ...P.model, modelId: P.model.id, labels, fake, fakeEmptyMask, noWebgpu });
     await store.setJob({ loading: false, loadCrashes: 0, [P.task === 'classify' ? 'classifyBackend' : 'backend']: `${ready.device}/${ready.dtype}` });
     await log(store, { e: 'model', k: P.task, ms: ready.loadMs });
@@ -217,7 +219,7 @@ export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, o
         await P.fail(store, r.id, err.message);
         // WebGPU 抠出空遮罩：记住本设备改用 WASM，刷新后重抠这张（这次算失败一次）
         if (err.message === EMPTY_MASK_ERROR && ready.device !== 'wasm') {
-          await store.setDevice({ mattingNoWebgpu: true });
+          await store.setDevice({ noWebgpu: true });
           await log(store, { e: 'noWebgpu', i: indexOf(job, r.id) });
           onChange();
           break;

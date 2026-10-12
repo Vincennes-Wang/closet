@@ -187,7 +187,7 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
     removeQueued: (id) => tx('readwrite', (os) => req(os.delete(id)), QUEUE),
 
     // ---------- 任务状态 ----------
-    // 本设备的设置（meta 的 device 键），例如 { mattingNoWebgpu: true }。不随任务清空
+    // 本设备的设置（meta 的 device 键），例如 { noWebgpu: true }。不随任务清空
     getDevice: async () => (await tx('readonly', (os) => req(os.get('device')), META)) ?? {},
     setDevice: (patch) => tx('readwrite', async (os) => {
       const next = { ...((await req(os.get('device'))) ?? {}), ...patch };
