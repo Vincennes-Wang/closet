@@ -2,6 +2,20 @@
 
 PROGRESS.md 移出的旧记录，按日期倒序，原文未改。
 
+## 最近一次工作（2026-10-12，A：文档瘦身 + 国内可用 + 慢速提示）
+- 完成：
+  - 文档：旧记录移到 `docs/HISTORY.md`；删除已关闭问题和过时的"厚度 q4f16"；CLAUDE.md 合并阶段 0 结论和项目决策的重复，加 PROGRESS 不超过 60 行的规则。
+  - 国内可用：transformers.js 和 ONNX Runtime 文件放进 `vendor/transformers-4.3.1/`（来源、许可证、sha256 见 `vendor/README.md`）。Worker 从本站加载，`wasmPaths` 保留 transformers.js 选的文件名、改成本站地址。模型地址提取为 `config.js` `MODEL_HOST`（默认 huggingface.co）。SW 预缓存 `.asyncify` 那套（27 MB），缓存名 `closet-v18`。用户要求另外放了 Safari 26 以下无 WebGPU 用的普通版（14 MB，不预缓存）。
+  - 慢速提示：WASM 设备开始前显示"这台设备处理较慢，N 张约需 X 分钟，处理中请保持本页面打开"；处理中进度行显示"剩余约 X 分钟"，按本次任务实际平均（`job.timing`），刷新后仍在。
+- 验证结果：
+  - `node --test tests/*.test.mjs` 27/27 通过。新增：离线时 vendor 3 个文件从 SW 缓存读到；`tests/queue.test.mjs` 估算纯函数 3 个；浏览器测试（`noWebgpu` + `?fakeMatting=1500`）断言估算文字、剩余时间、刷新后仍显示、WebGPU 设备不显示估算。纯函数测试先确认失败再实现。
+  - Network 检查（Mac Chrome 155 headless，真模型，抠图 + 分类全流程 2 张，Chrome 参数把 `cdn.jsdelivr.net` 设为解析失败模拟国内，CDP 记录页面和 Worker 的全部请求）：
+    - WebGPU：成功 2、分类 2，`webgpu/fp16`。发往 jsDelivr 的请求 0 个，失败请求 0 个。
+    - WASM（`noWebgpu`）：成功 2、分类 2，`wasm/quantized`，用时 25 秒。发往 jsDelivr 的请求 0 个，失败请求 0 个。
+    - Worker 实际请求的 vendor 文件：`transformers.min.js`、`ort-wasm-simd-threaded.asyncify.mjs`、`ort-wasm-simd-threaded.asyncify.wasm`，和计划一致。其他外部请求只有 huggingface.co 和它的下载 CDN `us.aws.cdn.hf.co`。
+  - 没在真机验证：iPhone、360 浏览器、旧 Safari 的普通版 ORT 文件。
+
+
 ## 最近一次工作（2026-10-12，小米手机：分类也改用 WASM）
 - 小米真机验证上一条：抠图成功，每张 20–30 秒（WASM），以后都用 WASM 也正常。但分类离谱（短裤、背心 → 长袖线衣）。
 - 已确认原因：验证页同一张短裤照片"不抠图"分类，强制 WebGPU q4f16 结果离谱，强制 WASM int8 正确。即小米的 WebGPU 分类也算错。

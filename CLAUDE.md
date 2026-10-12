@@ -49,7 +49,8 @@
 ## 项目决策（穿搭 PWA）
 - 用途：给家人用的衣橱 + 搭配网页。
 - 当前定位：个人和家人朋友免费使用，非商用。
-- 平台：PWA，托管在 GitHub Pages。无构建步骤，无后端。第三方库放在 `vendor/`（本站加载，不用 CDN：jsDelivr 在中国打不开，2026-10-12 用户实测），固定版本号，来源 URL、许可证和 sha256 见 `vendor/README.md`，LICENSE 文件一起放进去。模型仍从 huggingface.co 下载（中国能打开），地址在 `config.js` `MODEL_HOST`，打不开时可换镜像。
+- 平台：PWA，托管在 GitHub Pages。无构建步骤，无后端。第三方库放在 `vendor/`（本站加载，不用 CDN：jsDelivr 在中国打不开，2026-10-12 用户实测），固定版本号，来源 URL、许可证和 sha256 见 `vendor/README.md`，LICENSE 文件一起放进去。模型从 `config.js` `MODEL_HOSTS` 按顺序下载（huggingface.co，网络错误时换 hf-mirror.com），本设备记住成功的地址（`meta.device.modelHost`），"上次抠图"一行显示用的域名。国内 Safari 从 huggingface.co 下载报 "Load failed"（2026-10-12），哪个请求失败未确认；诊断页 `check.html`（"关于"区有链接）逐个检查本站和两个模型地址。hf-mirror.com 从国外访问会 308 跳回 huggingface.co 且没有 CORS 头，所以只能在国内验证。
+- 放弃 Safari 26 以下的设备（iOS 17 实测跑不通，2026-10-12）。
 - 个人数据（衣物照片、搭配）只存在用户浏览器的 IndexedDB 中，绝不进仓库。
 - 应用内抠图：RMBG-1.4（`briaai/RMBG-1.4`，Bria 非商用许可，允许个人非商用使用）。模型 ID 只在 `config.js` 的 `MATTING_MODEL.id` 定义，换模型只改这一处。
 - 抠图是可选功能（2026-10-11 决策）：抠图失败或用户选"用原图"时，原图照常录入，应用完整可用。阶段 2a 在录入时批量抠图（队列），见下方"阶段计划"。仍接收透明 PNG（例如别处抠好的图）。

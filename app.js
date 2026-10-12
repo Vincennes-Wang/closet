@@ -164,6 +164,7 @@ function openEdit(item) {
 // ---------- 抠图队列 ----------
 const fake = new URLSearchParams(location.search).get('fakeMatting'); // 测试用，见 model-worker.js
 const fakeEmptyMask = new URLSearchParams(location.search).has('fakeEmptyMask'); // 测试用：模拟 WebGPU 遮罩全空
+const fakeHostFail = new URLSearchParams(location.search).get('fakeHostFail') ?? ''; // 测试用：模拟这个模型地址网络失败
 const qurls = new Set();
 const duration = (ms) => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)} 分 ${s % 60} 秒`; };
 const progressText = (p) => `${p.phase === 'classify' ? `分类 ${p.classifyProcessed} / ${p.total}（失败 ${p.classifyFailed}）` : `抠图 ${p.processed} / ${p.total}（失败 ${p.failed}）`} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}`;
@@ -219,7 +220,7 @@ async function renderQueue() {
   }, 'primary');
   box.replaceChildren(...(queue.length ? [el('section', { className: 'card' },
     el('h2', { textContent: `待确认 · ${queue.length}` }),
-    p ? el('p', { className: 'muted', id: 'lastJob', textContent: `上次抠图：成功 ${p.done}，失败 ${p.failed}，取消 ${p.skipped} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}${p.backend ? ` · ${p.backend}` : ''} · 分类 ${p.classified} 张，失败 ${p.classifyFailed}` }) : '',
+    p ? el('p', { className: 'muted', id: 'lastJob', textContent: `上次抠图：成功 ${p.done}，失败 ${p.failed}，取消 ${p.skipped} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}${p.backend ? ` · ${p.backend}` : ''}${p.modelHost ? ` · ${p.modelHost}` : ''} · 分类 ${p.classified} 张，失败 ${p.classifyFailed}` }) : '',
     p ? timeline(job) : '',
     backend === 'wasm' ? el('p', { className: 'hint', id: 'slowHint',
       textContent: `这台设备处理较慢，${waiting} 张约需 ${minutesText(Math.max(60000, estimateMs(waiting, backend)))}，处理中请保持本页面打开` }) : '',
@@ -375,6 +376,6 @@ if (!job?.running) {
 document.documentElement.dataset.ready = '1'; // 事件已绑定、衣橱已渲染（测试等这个标记）
 showDiag();
 if (job?.running) {
-  const result = await resumeQueue(store, { fake: fake === null ? null : Number(fake), fakeEmptyMask, onChange: renderQueue });
+  const result = await resumeQueue(store, { fake: fake === null ? null : Number(fake), fakeEmptyMask, fakeHostFail, onChange: renderQueue });
   if (result !== 'reloading') { await renderQueue(); if (result !== 'paused') await render(); }
 }

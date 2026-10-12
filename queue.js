@@ -4,7 +4,7 @@
 // 任务状态存在 IndexedDB 的 job 里，刷新或崩溃后从这里接着做。
 import {
   MATTING_MODEL, MATTING_PER_LOAD, CLASSIFY_MODEL, CLASSIFY_PER_LOAD, MAX_ATTEMPTS, THUMB_SIDE, LOAD_DELAY_MS, EMPTY_MASK_ERROR,
-  ESTIMATE_MS, pickBackend,
+  ESTIMATE_MS, pickBackend, MODEL_HOSTS,
 } from './config.js';
 
 // 两段的差别都在这里：用哪个模型、每次加载几张、怎么判断"待处理 / 处理中"、怎么记成功和失败
@@ -157,7 +157,7 @@ export function summarize(job, queue) {
     phase: job?.phase ?? 'matting',
     total: ids.size, done, failed, skipped, processed: done + failed,
     classified: cCount('done'), classifyFailed: cCount('failed'), classifyProcessed: cCount('done') + cCount('failed'),
-    reloads: job?.reloads ?? 0, recoveries: job?.recoveries ?? 0, backend: job?.backend ?? '',
+    reloads: job?.reloads ?? 0, recoveries: job?.recoveries ?? 0, backend: job?.backend ?? '', modelHost: job?.modelHost ?? '',
     elapsedMs: job?.startedAt ? (job.endedAt ?? Date.now()) - job.startedAt : 0,
   };
 }
@@ -174,7 +174,7 @@ const finish = (store) => store.setJob({ running: false, loading: false, endedAt
 
 // 页面加载时调用。onChange 在每张处理前后调用，用来刷新进度显示。
 // 返回 'idle' | 'paused' | 'reloading' | 'finished'
-export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, onChange = () => {}, reload = () => location.reload() } = {}) {
+export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, fakeHostFail = '', onChange = () => {}, reload = () => location.reload() } = {}) {
   let job = await store.getJob();
   if (!job?.running) return 'idle';
   // 上一条不是"自动刷新"或"开始"，说明上个页面意外结束（崩溃或被关掉）
@@ -232,8 +232,12 @@ export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, o
     // mattingNoWebgpu 是 closet-v16 写的旧键名，照样认
     const device = await store.getDevice();
     const noWebgpu = !!(device.noWebgpu || device.mattingNoWebgpu);
-    const ready = await workerCall(w, { type: 'init', task: P.task, ...P.model, modelId: P.model.id, labels, fake, fakeEmptyMask, noWebgpu });
-    await store.setJob({ loading: false, loadCrashes: 0, [P.task === 'classify' ? 'classifyBackend' : 'backend']: `${ready.device}/${ready.dtype}` });
+    // 模型地址：本设备成功过的排第一，其余按 MODEL_HOSTS 顺序
+    const hosts = [...new Set([device.modelHost, ...MODEL_HOSTS].filter(Boolean))];
+    const ready = await workerCall(w, { type: 'init', task: P.task, ...P.model, modelId: P.model.id, labels, fake, fakeEmptyMask, noWebgpu, hosts, fakeHostFail });
+    if (ready.host !== device.modelHost) await store.setDevice({ modelHost: ready.host });
+    await store.setJob({ loading: false, loadCrashes: 0, modelHost: new URL(ready.host).host,
+      [P.task === 'classify' ? 'classifyBackend' : 'backend']: `${ready.device}/${ready.dtype}` });
     await log(store, { e: 'model', k: P.task, ms: ready.loadMs });
 
     for (const r of batch) {

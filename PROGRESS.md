@@ -1,31 +1,31 @@
 # PROGRESS
 - 状态：进行中
-- 当前阶段：A（文档瘦身 + 国内可用 + 慢速提示）已完成，待 iPhone 确认；下一步 B = 阶段 3 备份（导出 / 导入）
-- 累计用时：约 24（本次约 2 小时，估计）
-- 线上地址：https://vincennes-wang.github.io/closet/（应用）、https://vincennes-wang.github.io/closet/spike/（阶段 0 验证页）
+- 当前阶段：国内跑通模型下载（诊断页 + 自动换镜像），待国内测试；之后 B = 阶段 3 备份（导出 / 导入）
+- 累计用时：约 25（本次约 1 小时，估计）
+- 线上地址：https://vincennes-wang.github.io/closet/（应用）、https://vincennes-wang.github.io/closet/check.html（网络检查）
 
-## 最近一次工作（2026-10-12，A：文档瘦身 + 国内可用 + 慢速提示）
+## 最近一次工作（2026-10-12，国内模型下载）
+- 用户反馈：A 在 iPhone 通过。国内朋友 Safari 27 报"加载抠图模型失败：Load failed"。iOS 17 也不行，用户决定放弃 Safari 26 以下的设备。
+- 已确认：错误原文就是 "Load failed"，即 Safari 的 `fetch` 网络错误，没有被 ONNX Runtime 包装，所以是下载模型文件的请求失败，不是 vendor 文件。哪个请求失败（huggingface.co 本身，还是大文件 CDN `us.aws.cdn.hf.co`）未确认。
 - 完成：
-  - 文档：旧记录移到 `docs/HISTORY.md`；删除已关闭问题和过时的"厚度 q4f16"；CLAUDE.md 合并阶段 0 结论和项目决策的重复，加 PROGRESS 不超过 60 行的规则。
-  - 国内可用：transformers.js 和 ONNX Runtime 文件放进 `vendor/transformers-4.3.1/`（来源、许可证、sha256 见 `vendor/README.md`）。Worker 从本站加载，`wasmPaths` 保留 transformers.js 选的文件名、改成本站地址。模型地址提取为 `config.js` `MODEL_HOST`（默认 huggingface.co）。SW 预缓存 `.asyncify` 那套（27 MB），缓存名 `closet-v18`。用户要求另外放了 Safari 26 以下无 WebGPU 用的普通版（14 MB，不预缓存）。
-  - 慢速提示：WASM 设备开始前显示"这台设备处理较慢，N 张约需 X 分钟，处理中请保持本页面打开"；处理中进度行显示"剩余约 X 分钟"，按本次任务实际平均（`job.timing`），刷新后仍在。
+  - 从 git 历史删除旧 Safari 用的 `ort-wasm-simd-threaded.{wasm,mjs}`（filter-branch，用户执行），强制推送；文档同步。
+  - 诊断页 `check.html`：在浏览器里逐个下载本站 vendor 文件和两个模型地址（huggingface.co、hf-mirror.com）的 config、preprocessor、模型前 1 MB，显示状态、最终域名、耗时、错误原文，可复制结果。"关于"区加链接。本站文件加 `?net` 绕过 SW。
+  - 自动换镜像：`config.js` `MODEL_HOSTS`，网络错误（TypeError）时换下一个地址；本设备记住成功的地址（`meta.device.modelHost`）；"上次抠图"一行显示域名。缓存名 `closet-v19`。
 - 验证结果：
-  - `node --test tests/*.test.mjs` 27/27 通过。新增：离线时 vendor 3 个文件从 SW 缓存读到；`tests/queue.test.mjs` 估算纯函数 3 个；浏览器测试（`noWebgpu` + `?fakeMatting=1500`）断言估算文字、剩余时间、刷新后仍显示、WebGPU 设备不显示估算。纯函数测试先确认失败再实现。
-  - Network 检查（Mac Chrome 155 headless，真模型，抠图 + 分类全流程 2 张，Chrome 参数把 `cdn.jsdelivr.net` 设为解析失败模拟国内，CDP 记录页面和 Worker 的全部请求）：
-    - WebGPU：成功 2、分类 2，`webgpu/fp16`。发往 jsDelivr 的请求 0 个，失败请求 0 个。
-    - WASM（`noWebgpu`）：成功 2、分类 2，`wasm/quantized`，用时 25 秒。发往 jsDelivr 的请求 0 个，失败请求 0 个。
-    - Worker 实际请求的 vendor 文件：`transformers.min.js`、`ort-wasm-simd-threaded.asyncify.mjs`、`ort-wasm-simd-threaded.asyncify.wasm`，和计划一致。其他外部请求只有 huggingface.co 和它的下载 CDN `us.aws.cdn.hf.co`。
-  - 没在真机验证：iPhone、360 浏览器、旧 Safari 的普通版 ORT 文件。
+  - `node --test tests/*.test.mjs` 28/28 通过。新增浏览器测试（`?fakeHostFail=huggingface.co`）：先确认失败，再实现；断言换到 hf-mirror.com、本设备记住、下个任务直接用它。
+  - 真模型（Mac Chrome，huggingface.co 设为解析失败）：transformers.js 报原始 `TypeError: Failed to fetch`，应用依次请求了 huggingface.co 和 hf-mirror.com，证明换地址生效。hf-mirror.com 从巴黎访问 308 跳回 huggingface.co 且没有 CORS 头，所以两者都失败，镜像在国内能否用只能国内测。
+  - 诊断页（Mac Chrome，390 宽截图）：本站 2 项、huggingface.co 3 项成功（模型落在 `us.aws.cdn.hf.co`）；hf-mirror.com 3 项 `Failed to fetch`（原因同上）。
 
 ## 下次从这里继续
-1. 用户 iPhone 确认 A 后，做 B（阶段 3 备份）：Plan mode 给计划，用户确认后写代码。
-2. 中国境内测试：360 浏览器打开应用录入，看"上次抠图"一行是否 `wasm/quantized`、图里是否有衣服。模型大文件实际从 `us.aws.cdn.hf.co` 下载，国内打不开时把 `MODEL_HOST` 换成镜像。
+1. 看国内朋友的诊断页截图：
+   - hf-mirror.com 成功：再在应用里录 1 张，"上次抠图"一行应显示 `hf-mirror.com`。
+   - huggingface.co 和 hf-mirror.com 都失败：Plan mode 给"模型文件放 GitHub Pages"的计划（RMBG quantized 44 MB、fp16 88 MB；SigLIP q4f16 54 MB、int8 94 MB）。
+2. 国内跑通后做 B（阶段 3 备份）：Plan mode 给计划。
 3. 下次 iPhone 录入时顺便看分类每页 6 张后是否还崩溃（看"详细记录"）。
-4. iPhone 看一眼页头文字和照片占用是否合理。
 
 ## 未解决问题
-- 中国网络：360 浏览器第一次报 "Failed to fetch dynamically imported module"，当时更可能是 jsDelivr 打不开，现已改为本站加载，待国内真机确认。
+- 国内模型下载："Load failed" 是哪个请求失败未确认，等诊断页结果。
 - 360 浏览器 "does not support fp16"：已修（改用 WASM），未真机验证。
 - 慢速提示的经验值（`ESTIMATE_MS`）来自 iPhone 和小米各一次实测，未在其他设备核对。
 - 交付前："关于"区的存图格式诊断（`app.js` `showDiag`）没必要就删除。
-- iPhone 第一轮失败原因未确认（没有 JSON）。第一轮页面默认加载 BiRefNet + SigLIP fp16（共约 520 MB），第二轮默认什么都不加载；要确认是不是这个原因，可以在 iPhone 上用第一轮的组合再跑一次，但现在已不需要。
+- iPhone 第一轮失败原因未确认（没有 JSON），现在已不需要。

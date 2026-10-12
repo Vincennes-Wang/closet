@@ -2,20 +2,40 @@
 // 一个 Worker 只做一种任务（task）：matting = 抠图（RMBG），classify = 分类（fashionSigLIP 图像模型）。
 // 消息：init（加载模型）/ run（处理一张，ImageBitmap 以 transfer 方式传入）/ dispose（释放 ONNX session）
 // 测试用：init 时 fake 为数字，则不加载模型，每张等待 fake 毫秒后返回假结果；fakeEmptyMask 为 true 时，非 WASM 后端输出全空遮罩
-import { pickBackend, EMPTY_MASK_RATIO, EMPTY_MASK_ERROR, VENDOR, MODEL_HOST } from './config.js';
+import { pickBackend, EMPTY_MASK_RATIO, EMPTY_MASK_ERROR, VENDOR } from './config.js';
 const LOCAL = new URL(VENDOR, import.meta.url).href;
 let task = null, model = null, processor = null, spec = null, RawImage = null, fake = null, labels = null;
 let device = null, fakeEmptyMask = false;
 
 // labels：分类用的预计算标签向量 [{ id, embedding }]（label-embeddings.json）
+// 按顺序试模型地址：网络错误（fetch 的 TypeError，Safari "Load failed"、Chrome "Failed to fetch"）换下一个，其他错误直接报。
+// load(host) 成功时返回结果，加上实际用的 host
+async function loadFromHosts(hosts, load) {
+  let lastErr;
+  for (const host of hosts) {
+    try { return { host, ...(await load(host)) }; } catch (err) {
+      if (!(err instanceof TypeError)) throw err;
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
+
 // noWebgpu：本设备 WebGPU 抠图结果不可用，只用 WASM（见 queue.js）
-async function init({ task: initTask = 'matting', modelId, dtype, wasmDtype, input, output, config, labels: l, fake: f, noWebgpu = false, fakeEmptyMask: fe = false }) {
+// hosts：模型地址，按顺序尝试（config.js MODEL_HOSTS，本设备成功过的排第一）
+// 测试用：fakeHostFail 为域名时，假模型在这个地址上模拟网络错误
+async function init({ task: initTask = 'matting', modelId, dtype, wasmDtype, input, output, config, labels: l, fake: f, noWebgpu = false, fakeEmptyMask: fe = false, hosts, fakeHostFail = '' }) {
   task = initTask; spec = { input, output }; labels = l ?? null;
-  if (typeof f === 'number') { fake = f; fakeEmptyMask = fe; device = noWebgpu ? 'wasm' : 'fake'; return { device, dtype: 'fake', loadMs: 0 }; }
+  if (typeof f === 'number') {
+    fake = f; fakeEmptyMask = fe; device = noWebgpu ? 'wasm' : 'fake';
+    return loadFromHosts(hosts, async (host) => {
+      if (fakeHostFail && host.includes(fakeHostFail)) throw new TypeError('Failed to fetch');
+      return { device, dtype: 'fake', loadMs: 0 };
+    });
+  }
   const t = await import(`${LOCAL}transformers.min.js`);
   t.env.allowLocalModels = false;
-  t.env.remoteHost = MODEL_HOST;
-  // transformers.js 导入时按浏览器选好 ONNX Runtime 文件（一般是 .asyncify 版，Safari 26 以下且没有 WebGPU 时是普通版），
+  // transformers.js 导入时按浏览器选好 ONNX Runtime 文件（.asyncify 版；Safari 26 以下且没有 WebGPU 时选普通版，本站没有，放弃这类设备，2026-10-12），
   // 地址指向 jsDelivr。保留它选的文件名，改从本站下载
   const wasm = t.env.backends.onnx.wasm;
   wasm.wasmPaths = Object.fromEntries(Object.entries(wasm.wasmPaths).map(([k, u]) => [k, LOCAL + String(u).split('/').pop()]));
@@ -29,11 +49,20 @@ async function init({ task: initTask = 'matting', modelId, dtype, wasmDtype, inp
   const picked = pickBackend(gpu, { dtype, wasmDtype });
   device = picked.device;
   const realDtype = picked.dtype;
-  const t0 = performance.now();
   const opts = { device, dtype: realDtype, ...(config ? { config } : {}) };
-  model = task === 'classify' ? await t.SiglipVisionModel.from_pretrained(modelId, opts) : await t.AutoModel.from_pretrained(modelId, opts);
-  processor = await t.AutoProcessor.from_pretrained(modelId);
-  return { device, dtype: realDtype, loadMs: Math.round(performance.now() - t0) };
+  return loadFromHosts(hosts, async (host) => {
+    t.env.remoteHost = host;
+    const t0 = performance.now();
+    try {
+      model = task === 'classify' ? await t.SiglipVisionModel.from_pretrained(modelId, opts) : await t.AutoModel.from_pretrained(modelId, opts);
+      processor = await t.AutoProcessor.from_pretrained(modelId);
+    } catch (err) {
+      await model?.dispose().catch(() => {});
+      model = null;
+      throw err;
+    }
+    return { device, dtype: realDtype, loadMs: Math.round(performance.now() - t0) };
+  });
 }
 
 // ImageBitmap → OffscreenCanvas；位图用完立即 close

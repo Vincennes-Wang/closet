@@ -1,11 +1,10 @@
 // 离线缓存应用文件。改了下面任一文件后，把版本号加 1，用户下次打开时更新。
-const CACHE = 'closet-v18';
+const CACHE = 'closet-v19';
 const FILES = [
   './', 'index.html', 'app.js', 'store.js', 'image.js', 'options.js', 'style.css',
   'config.js', 'queue.js', 'model-worker.js', 'taxonomy.js', 'label-embeddings.json',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
-  // 本站的 transformers.js 和 ONNX Runtime（见 config.js VENDOR）。不带 .asyncify 的那套只有 Safari 26 以下
-  // 且没有 WebGPU 时才用（14 MB），不预缓存，用到时从网络下载
+  // 本站的 transformers.js 和 ONNX Runtime（见 config.js VENDOR）
   'vendor/transformers-4.3.1/transformers.min.js',
   'vendor/transformers-4.3.1/ort-wasm-simd-threaded.asyncify.mjs',
   'vendor/transformers-4.3.1/ort-wasm-simd-threaded.asyncify.wasm',
@@ -26,6 +25,7 @@ const APP_URLS = new Set(FILES.map((f) => new URL(f, self.registration.scope).hr
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
+  if (url.searchParams.has('net')) return; // 诊断页 check.html：直接走网络
   url.search = '';
   if (e.request.method !== 'GET' || !APP_URLS.has(url.href)) return;
   e.respondWith(caches.open(CACHE).then(async (cache) => {

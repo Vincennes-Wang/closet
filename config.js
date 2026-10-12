@@ -3,9 +3,10 @@
 // transformers.js 和 ONNX Runtime 的 wasm 放在本站（jsDelivr 在中国打不开，2026-10-12 用户实测）。来源和许可证见 vendor/README.md
 export const VENDOR = './vendor/transformers-4.3.1/';
 
-// 模型下载地址（transformers.js 的 env.remoteHost）。huggingface.co 在中国能打开（2026-10-12 用户实测）。
-// 打不开时可换成镜像，例如 'https://hf-mirror.com/'（末尾要有 /）
-export const MODEL_HOST = 'https://huggingface.co/';
+// 模型下载地址（transformers.js 的 env.remoteHost），按顺序尝试，末尾要有 /。
+// 国内 Safari 从 huggingface.co 下载报 "Load failed"（2026-10-12），网络错误时换下一个（镜像）。
+// 成功的地址本设备记住（meta.device.modelHost），下次先试它（见 queue.js）
+export const MODEL_HOSTS = ['https://huggingface.co/', 'https://hf-mirror.com/'];
 // 模型参数取自 spike/index.html MATTING_MODELS.rmbg（2026-10-10 在 Hugging Face 核实）
 export const MATTING_MODEL = {
   id: 'briaai/RMBG-1.4', // Bria 非商用许可，商用前必须替换

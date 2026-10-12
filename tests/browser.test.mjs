@@ -405,3 +405,34 @@ test('慢速提示：WASM 设备开始前显示估算；处理中显示剩余时
   await chrome.waitFor(`document.getElementById('lastJob')`, 60000);
   assert.ok((await chrome.evaluate(QUEUE_STATE)).job.timing.classify.n >= 1);
 });
+
+// 国内（2026-10-12）：Safari 下载模型报 "Load failed"。第一个模型地址网络失败时换下一个（hf-mirror.com），本设备记住。
+// fakeHostFail=huggingface.co：假模型在这个地址上模拟网络错误
+test('模型地址：第一个地址网络失败时自动换镜像，本设备记住，下个任务直接用它', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/?fakeMatting=50&fakeHostFail=huggingface.co`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  await chrome.evaluate(pickJpegs(1));
+  await chrome.waitFor(`document.querySelectorAll('#queue .review').length === 1`);
+  await chrome.evaluate(clickButton('#queue', '开始处理（1 张）'));
+  await chrome.waitFor(`document.getElementById('lastJob')`, 30000);
+  const st = await chrome.evaluate(QUEUE_STATE);
+  assert.deepEqual(st.statuses, ['cutout_done']);
+  assert.equal(st.job.modelHost, 'hf-mirror.com');
+  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), / · hf-mirror\.com/);
+  const device = await chrome.evaluate(`(async () => {
+    const { openStore } = await import('/store.js');
+    const s = await openStore(); const d = await s.getDevice(); s.close(); return d;
+  })()`);
+  assert.equal(device.modelHost, 'https://hf-mirror.com/');
+  // 下个任务：先试记住的地址（不加 fakeHostFail 也直接用镜像）
+  await chrome.evaluate(clickButton('#queue', '全部确认'));
+  await chrome.waitFor(`document.querySelectorAll('#queue .review').length === 0`);
+  await chrome.goto(`${server.origin}/?fakeMatting=50`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  await chrome.evaluate(pickJpegs(1));
+  await chrome.waitFor(`document.querySelectorAll('#queue .review').length === 1`);
+  await chrome.evaluate(clickButton('#queue', '开始处理（1 张）'));
+  await chrome.waitFor(`(${QUEUE_STATE}).then((s) => s.job.events[0].n === 1 && !s.job.running)`, 30000);
+  assert.equal((await chrome.evaluate(QUEUE_STATE)).job.modelHost, 'hf-mirror.com');
+});

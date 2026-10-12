@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>衣橱 · 网络检查</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .row { display: grid; grid-template-columns: 2.2em 1fr; gap: 2px 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .row b { grid-row: span 2; font-size: 18px; text-align: center; }
+  .row .muted { grid-column: 2; word-break: break-all; }
+  pre { white-space: pre-wrap; word-break: break-all; font-size: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h2>网络检查</h2>
+  <p class="muted">逐个下载应用要用的文件，方式和应用相同。全部检查完后截图，或点"复制结果"发给开发者。大约需要 1–3 分钟。</p>
+  <div id="rows" class="card"></div>
+  <p id="done" class="muted">检查中…</p>
+  <button type="button" id="copy" hidden>复制结果</button>
+  <pre id="text" hidden></pre>
+  <p><a href="./">回到衣橱</a></p>
+</main>
+<script type="module">
+// 诊断页（2026-10-12，国内 Safari 下载模型报 "Load failed"）：在用户浏览器里逐个 fetch 应用会用到的地址，看哪个失败。
+// 本站文件加 ?net 绕过 Service Worker 缓存（见 sw.js）。模型只取前 1 MB
+import { VENDOR, MODEL_HOSTS, MATTING_MODEL } from './config.js';
+
+const MB = 1024 * 1024;
+const local = (f) => ({ name: `本站 ${f}`, url: `${VENDOR}${f}?net` });
+const model = (host, path, range) => ({ name: `${new URL(host).host} ${path}${range ? '（前 1 MB）' : ''}`, url: `${host}${MATTING_MODEL.id}/resolve/main/${path}`, range });
+const CHECKS = [
+  local('transformers.min.js'),
+  local('ort-wasm-simd-threaded.asyncify.wasm'),
+  ...MODEL_HOSTS.flatMap((h) => [model(h, 'config.json'), model(h, 'preprocessor_config.json'), model(h, 'onnx/model_quantized.onnx', true)]),
+];
+
+async function check({ url, range }) {
+  const t0 = performance.now();
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 90000);
+  try {
+    const res = await fetch(url, { cache: 'no-store', signal: ctl.signal, ...(range ? { headers: { Range: `bytes=0-${MB - 1}` } } : {}) });
+    let bytes = 0;
+    const reader = res.body.getReader();
+    for (;;) { const { done, value } = await reader.read(); if (done) break; bytes += value.length; }
+    const ok = res.ok && bytes > 0;
+    return { ok, text: `HTTP ${res.status} · ${(bytes / MB).toFixed(2)} MB · ${Math.round(performance.now() - t0)} ms · 来自 ${new URL(res.url).host}` };
+  } catch (err) {
+    return { ok: false, text: `${err.name}: ${err.message} · ${Math.round(performance.now() - t0)} ms` };
+  } finally { clearTimeout(timer); }
+}
+
+const lines = [`${new Date().toISOString()} · ${navigator.userAgent} · WebGPU ${'gpu' in navigator ? '有' : '无'}`];
+for (const c of CHECKS) {
+  const row = Object.assign(document.createElement('div'), { className: 'row' });
+  row.innerHTML = '<b>…</b><span></span><span class="muted">检查中</span>';
+  row.children[1].textContent = c.name;
+  document.getElementById('rows').append(row);
+  const r = await check(c);
+  row.children[0].textContent = r.ok ? '✅' : '❌';
+  row.children[2].textContent = r.text;
+  lines.push(`${r.ok ? 'OK  ' : 'FAIL'} ${c.name} · ${r.text}`);
+}
+const text = lines.join('\n');
+document.getElementById('done').textContent = '检查完成。';
+Object.assign(document.getElementById('text'), { textContent: text, hidden: false });
+const copy = document.getElementById('copy');
+copy.hidden = false;
+copy.onclick = async () => {
+  try { await navigator.clipboard.writeText(text); copy.textContent = '已复制'; } catch { copy.textContent = '复制失败，请截图'; }
+};
+document.documentElement.dataset.done = '1';
+</script>
+</body>
+</html>
