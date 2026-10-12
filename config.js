@@ -3,20 +3,24 @@
 // transformers.js 和 ONNX Runtime 的 wasm 放在本站（jsDelivr 在中国打不开，2026-10-12 用户实测）。来源和许可证见 vendor/README.md
 export const VENDOR = './vendor/transformers-4.3.1/';
 
-// 模型下载地址（transformers.js 的 env.remoteHost），按顺序尝试，末尾要有 /。
-// 国内 Safari 从 huggingface.co 下载报 "Load failed"（2026-10-12），网络错误时换下一个（镜像）。
-// 成功的地址本设备记住（meta.device.modelHost），下次先试它（见 queue.js）
-export const MODEL_HOSTS = ['https://huggingface.co/', 'https://hf-mirror.com/'];
 // 模型参数取自 spike/index.html MATTING_MODELS.rmbg（2026-10-10 在 Hugging Face 核实）
+// hosts：模型下载地址（transformers.js 的 env.remoteHost），按顺序尝试，网络错误时换下一个，末尾要有 /。
+// 中国大陆网页打不开 huggingface.co 和 hf-mirror.com，能打开 GitHub Pages（2026-10-12 实测）。
+// 分类模型放在自己的仓库 closet-models（Apache-2.0，可转发）；RMBG 不转发（许可原文打不开、要填表下载），
+// 所以国内抠图模型下载不了，跳过抠图（见 queue.js）
 export const MATTING_MODEL = {
   id: 'briaai/RMBG-1.4', // Bria 非商用许可，商用前必须替换
+  hosts: ['https://huggingface.co/'],
   dtype: 'fp16', // WebGPU
   wasmDtype: 'quantized', // 没有 WebGPU 时
   input: 'input', output: 'output', config: { model_type: 'custom' },
 };
 
 // 分类模型：手机端只加载图像模型（q4f16，54 MB）；标签文字向量在 Mac 上预先算好（label-embeddings.json）
-export const CLASSIFY_MODEL = { id: 'Marqo/marqo-fashionSigLIP', dtype: 'q4f16', wasmDtype: 'int8' };
+export const CLASSIFY_MODEL = {
+  id: 'Marqo/marqo-fashionSigLIP', dtype: 'q4f16', wasmDtype: 'int8',
+  hosts: ['https://vincennes-wang.github.io/closet-models/', 'https://huggingface.co/'],
+};
 
 // 选后端：有 WebGPU 用 dtype，否则 WASM + wasmDtype。
 // fp16 类 dtype 还要显卡支持 shader-f16，否则 transformers.js 报 "The device (webgpu) does not support fp16"

@@ -233,7 +233,7 @@ test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重�
   assert.equal(st.job.recoveries, 2);
   assert.equal(st.job.reloads, 3); // 每次加载 1 张：崩溃后第 2 张 → 刷新 → 第 3 张 → 刷新 → 第 4 张 → 刷新 → 第 5 张 → 进入分类
   assert.equal(st.job.running, false);
-  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /成功 4，失败 1，取消 0 · 自动刷新 3 次 · 崩溃恢复 2 次/);
+  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /成功 4，失败 1，未抠图 0 · 自动刷新 3 次 · 崩溃恢复 2 次/);
   // 抠图失败的那张：提示用照片 App 抠图，没有"用原图"开关
   assert.match(await chrome.evaluate(`document.querySelector('#queue .review .hint').textContent`), /^抠图失败，将保存原图。也可以用照片 App 抠图/);
   assert.equal(await chrome.evaluate(`document.querySelectorAll('#queue .review .toggle-inline').length`), 4);
@@ -406,11 +406,38 @@ test('慢速提示：WASM 设备开始前显示估算；处理中显示剩余时
   assert.ok((await chrome.evaluate(QUEUE_STATE)).job.timing.classify.n >= 1);
 });
 
-// 国内（2026-10-12）：Safari 下载模型报 "Load failed"。第一个模型地址网络失败时换下一个（hf-mirror.com），本设备记住。
-// fakeHostFail=huggingface.co：假模型在这个地址上模拟网络错误
-test('模型地址：第一个地址网络失败时自动换镜像，本设备记住，下个任务直接用它', async () => {
+// 国内（2026-10-12）：huggingface.co、hf-mirror.com 都打不开（"Load failed"），GitHub Pages 能打开。
+// 抠图模型（只在 HF）下载不了时跳过抠图、保留原图，照常分类；分类模型先从 closet-models（GitHub Pages）下载。
+// fakeHostFail=域名：假模型在这个地址上模拟网络错误
+test('模型地址：抠图模型下载不了时跳过抠图、保留原图，分类照常（来自 closet-models）', async () => {
   await resetDb();
   await chrome.goto(`${server.origin}/?fakeMatting=50&fakeHostFail=huggingface.co`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  await chrome.evaluate(pickJpegs(2));
+  await chrome.waitFor(`document.querySelectorAll('#queue .review').length === 2`);
+  await chrome.evaluate(clickButton('#queue', '开始处理（2 张）'));
+  await chrome.waitFor(`document.getElementById('lastJob')`, 30000);
+  const st = await chrome.evaluate(QUEUE_STATE);
+  assert.deepEqual(st.statuses, ['skipped', 'skipped']);
+  assert.equal(st.job.paused, false);
+  assert.equal(st.job.classifyHost, 'vincennes-wang.github.io');
+  assert.equal(st.job.events.filter((v) => v.e === 'mattingUnavailable').length, 1);
+  const classified = await chrome.evaluate(`(async () => {
+    const { openStore } = await import('/store.js');
+    const s = await openStore(); const q = await s.listQueue(); s.close();
+    return q.map((r) => r.classify.status);
+  })()`);
+  assert.deepEqual(classified, ['done', 'done']);
+  const last = await chrome.evaluate(`document.getElementById('lastJob').textContent`);
+  assert.match(last, /成功 0，失败 0，未抠图 2/);
+  assert.match(last, / · 分类模型 vincennes-wang\.github\.io/);
+  assert.match(await chrome.evaluate(`document.querySelector('#queue .timeline pre').textContent`), /抠图模型下载不了，跳过抠图，保留原图/);
+  assert.match(await chrome.evaluate(`document.querySelector('#queue .review .hint').textContent`), /^没有抠图，将保存原图/);
+});
+
+test('模型地址：closet-models 下载不了时，分类改用 huggingface.co', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/?fakeMatting=50&fakeHostFail=vincennes-wang.github.io`);
   await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
   await chrome.evaluate(pickJpegs(1));
   await chrome.waitFor(`document.querySelectorAll('#queue .review').length === 1`);
@@ -418,21 +445,5 @@ test('模型地址：第一个地址网络失败时自动换镜像，本设备�
   await chrome.waitFor(`document.getElementById('lastJob')`, 30000);
   const st = await chrome.evaluate(QUEUE_STATE);
   assert.deepEqual(st.statuses, ['cutout_done']);
-  assert.equal(st.job.modelHost, 'hf-mirror.com');
-  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), / · hf-mirror\.com/);
-  const device = await chrome.evaluate(`(async () => {
-    const { openStore } = await import('/store.js');
-    const s = await openStore(); const d = await s.getDevice(); s.close(); return d;
-  })()`);
-  assert.equal(device.modelHost, 'https://hf-mirror.com/');
-  // 下个任务：先试记住的地址（不加 fakeHostFail 也直接用镜像）
-  await chrome.evaluate(clickButton('#queue', '全部确认'));
-  await chrome.waitFor(`document.querySelectorAll('#queue .review').length === 0`);
-  await chrome.goto(`${server.origin}/?fakeMatting=50`);
-  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
-  await chrome.evaluate(pickJpegs(1));
-  await chrome.waitFor(`document.querySelectorAll('#queue .review').length === 1`);
-  await chrome.evaluate(clickButton('#queue', '开始处理（1 张）'));
-  await chrome.waitFor(`(${QUEUE_STATE}).then((s) => s.job.events[0].n === 1 && !s.job.running)`, 30000);
-  assert.equal((await chrome.evaluate(QUEUE_STATE)).job.modelHost, 'hf-mirror.com');
+  assert.equal(st.job.classifyHost, 'huggingface.co');
 });

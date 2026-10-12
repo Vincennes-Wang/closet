@@ -22,7 +22,7 @@ async function loadFromHosts(hosts, load) {
 }
 
 // noWebgpu：本设备 WebGPU 抠图结果不可用，只用 WASM（见 queue.js）
-// hosts：模型地址，按顺序尝试（config.js MODEL_HOSTS，本设备成功过的排第一）
+// hosts：模型地址，按顺序尝试（config.js 各模型的 hosts）
 // 测试用：fakeHostFail 为域名时，假模型在这个地址上模拟网络错误
 async function init({ task: initTask = 'matting', modelId, dtype, wasmDtype, input, output, config, labels: l, fake: f, noWebgpu = false, fakeEmptyMask: fe = false, hosts, fakeHostFail = '' }) {
   task = initTask; spec = { input, output }; labels = l ?? null;
@@ -183,6 +183,7 @@ self.onmessage = async ({ data }) => {
     }
   } catch (err) {
     data.bitmap?.close?.();
-    self.postMessage({ id, ok: false, error: String(err?.message ?? err) });
+    // network：所有地址都是网络错误（模型下载不了），主线程据此跳过抠图
+    self.postMessage({ id, ok: false, error: String(err?.message ?? err), network: err instanceof TypeError });
   }
 };

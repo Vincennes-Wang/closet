@@ -4,7 +4,7 @@
 // 任务状态存在 IndexedDB 的 job 里，刷新或崩溃后从这里接着做。
 import {
   MATTING_MODEL, MATTING_PER_LOAD, CLASSIFY_MODEL, CLASSIFY_PER_LOAD, MAX_ATTEMPTS, THUMB_SIDE, LOAD_DELAY_MS, EMPTY_MASK_ERROR,
-  ESTIMATE_MS, pickBackend, MODEL_HOSTS,
+  ESTIMATE_MS, pickBackend,
 } from './config.js';
 
 // 两段的差别都在这里：用哪个模型、每次加载几张、怎么判断"待处理 / 处理中"、怎么记成功和失败
@@ -131,6 +131,7 @@ const EVENT_TEXT = {
   loadCrash: () => '发现加载模型时页面崩溃',
   crashIdle: () => '发现上个页面在两步之间崩溃',
   noWebgpu: (v) => `第 ${v.i} 张遮罩为空，本设备以后抠图和分类都改用 WASM`,
+  mattingUnavailable: (v) => `抠图模型下载不了，跳过抠图，保留原图（${v.n} 张）：${v.msg}`,
   reload: () => '自动刷新',
   dispose: (v) => `释放模型 ${v.ms} ms`,
   loadWait: (v) => `等待 ${v.ms} ms 再加载模型`,
@@ -157,14 +158,14 @@ export function summarize(job, queue) {
     phase: job?.phase ?? 'matting',
     total: ids.size, done, failed, skipped, processed: done + failed,
     classified: cCount('done'), classifyFailed: cCount('failed'), classifyProcessed: cCount('done') + cCount('failed'),
-    reloads: job?.reloads ?? 0, recoveries: job?.recoveries ?? 0, backend: job?.backend ?? '', modelHost: job?.modelHost ?? '',
+    reloads: job?.reloads ?? 0, recoveries: job?.recoveries ?? 0, backend: job?.backend ?? '', classifyHost: job?.classifyHost ?? '',
     elapsedMs: job?.startedAt ? (job.endedAt ?? Date.now()) - job.startedAt : 0,
   };
 }
 
 function workerCall(w, msg, transfer = []) {
   return new Promise((ok, fail) => {
-    w.onmessage = ({ data }) => (data.ok ? ok(data) : fail(new Error(data.error)));
+    w.onmessage = ({ data }) => (data.ok ? ok(data) : fail(Object.assign(new Error(data.error), { network: !!data.network })));
     w.onerror = (e) => fail(new Error(e.message || 'Worker 出错'));
     w.postMessage({ id: Date.now(), ...msg }, transfer);
   });
@@ -224,6 +225,7 @@ export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, f
   onChange();
 
   const w = new Worker(new URL('./model-worker.js', import.meta.url), { type: 'module' });
+  let mattingUnavailable = null; // 抠图模型下载不了时为错误原文
   try {
     // 分类要用 Mac 上预先算好的标签向量
     const labels = P.task === 'classify' ? (await (await fetch(new URL('./label-embeddings.json', import.meta.url))).json()).labels : null;
@@ -232,11 +234,8 @@ export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, f
     // mattingNoWebgpu 是 closet-v16 写的旧键名，照样认
     const device = await store.getDevice();
     const noWebgpu = !!(device.noWebgpu || device.mattingNoWebgpu);
-    // 模型地址：本设备成功过的排第一，其余按 MODEL_HOSTS 顺序
-    const hosts = [...new Set([device.modelHost, ...MODEL_HOSTS].filter(Boolean))];
-    const ready = await workerCall(w, { type: 'init', task: P.task, ...P.model, modelId: P.model.id, labels, fake, fakeEmptyMask, noWebgpu, hosts, fakeHostFail });
-    if (ready.host !== device.modelHost) await store.setDevice({ modelHost: ready.host });
-    await store.setJob({ loading: false, loadCrashes: 0, modelHost: new URL(ready.host).host,
+    const ready = await workerCall(w, { type: 'init', task: P.task, ...P.model, modelId: P.model.id, labels, fake, fakeEmptyMask, noWebgpu, fakeHostFail });
+    await store.setJob({ loading: false, loadCrashes: 0, [P.task === 'classify' ? 'classifyHost' : 'mattingHost']: new URL(ready.host).host,
       [P.task === 'classify' ? 'classifyBackend' : 'backend']: `${ready.device}/${ready.dtype}` });
     await log(store, { e: 'model', k: P.task, ms: ready.loadMs });
 
@@ -266,17 +265,30 @@ export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, f
       onChange();
     }
   } catch (err) {
-    // 模型加载失败（不是崩溃，例如断网）：暂停，让用户决定
-    await store.setJob({ loading: false, paused: true, error: `加载${P.name}模型失败：${err.message}` });
-    await log(store, { e: 'error', msg: err.message });
-    onChange();
-    return 'paused';
+    // 抠图模型下载不了（国内打不开 huggingface.co）：不暂停，跳过抠图（finally 之后处理）
+    if (P.task === 'matting' && err.network) mattingUnavailable = err.message;
+    else {
+      // 模型加载失败（不是崩溃，例如断网）：暂停，让用户决定
+      await store.setJob({ loading: false, paused: true, error: `加载${P.name}模型失败：${err.message}` });
+      await log(store, { e: 'error', msg: err.message });
+      onChange();
+      return 'paused';
+    }
   } finally {
     // 先在 Worker 里释放模型（WebGPU 显存等），再结束 Worker。阶段 0 Mac Safari 实测能释放大部分内存
     const t0 = performance.now();
     await Promise.race([workerCall(w, { type: 'dispose' }).catch(() => {}), new Promise((ok) => setTimeout(ok, 3000))]);
     await log(store, { e: 'dispose', ms: Math.round(performance.now() - t0) });
     w.terminate();
+  }
+
+  // 本任务里还没抠图的照片都标为"未抠图"（保留原图），刷新后进入分类。下个任务会再试一次抠图
+  if (mattingUnavailable !== null) {
+    const skip = await pending();
+    for (const r of skip) await store.patchQueued(r.id, (x) => ({ ...x, status: 'skipped' }));
+    await store.setJob({ loading: false });
+    await log(store, { e: 'mattingUnavailable', n: skip.length, msg: mattingUnavailable });
+    return nextPhase(store, P, { onChange, reload });
   }
 
   job = await store.getJob();

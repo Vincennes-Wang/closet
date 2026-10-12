@@ -220,7 +220,7 @@ async function renderQueue() {
   }, 'primary');
   box.replaceChildren(...(queue.length ? [el('section', { className: 'card' },
     el('h2', { textContent: `待确认 · ${queue.length}` }),
-    p ? el('p', { className: 'muted', id: 'lastJob', textContent: `上次抠图：成功 ${p.done}，失败 ${p.failed}，取消 ${p.skipped} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}${p.backend ? ` · ${p.backend}` : ''}${p.modelHost ? ` · ${p.modelHost}` : ''} · 分类 ${p.classified} 张，失败 ${p.classifyFailed}` }) : '',
+    p ? el('p', { className: 'muted', id: 'lastJob', textContent: `上次抠图：成功 ${p.done}，失败 ${p.failed}，未抠图 ${p.skipped} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}${p.backend ? ` · ${p.backend}` : ''}${p.classifyHost ? ` · 分类模型 ${p.classifyHost}` : ''} · 分类 ${p.classified} 张，失败 ${p.classifyFailed}` }) : '',
     p ? timeline(job) : '',
     backend === 'wasm' ? el('p', { className: 'hint', id: 'slowHint',
       textContent: `这台设备处理较慢，${waiting} 张约需 ${minutesText(Math.max(60000, estimateMs(waiting, backend)))}，处理中请保持本页面打开` }) : '',

@@ -49,7 +49,11 @@
 ## 项目决策（穿搭 PWA）
 - 用途：给家人用的衣橱 + 搭配网页。
 - 当前定位：个人和家人朋友免费使用，非商用。
-- 平台：PWA，托管在 GitHub Pages。无构建步骤，无后端。第三方库放在 `vendor/`（本站加载，不用 CDN：jsDelivr 在中国打不开，2026-10-12 用户实测），固定版本号，来源 URL、许可证和 sha256 见 `vendor/README.md`，LICENSE 文件一起放进去。模型从 `config.js` `MODEL_HOSTS` 按顺序下载（huggingface.co，网络错误时换 hf-mirror.com），本设备记住成功的地址（`meta.device.modelHost`），"上次抠图"一行显示用的域名。国内 Safari 从 huggingface.co 下载报 "Load failed"（2026-10-12），哪个请求失败未确认；诊断页 `check.html`（"关于"区有链接）逐个检查本站和两个模型地址。hf-mirror.com 从国外访问会 308 跳回 huggingface.co 且没有 CORS 头，所以只能在国内验证。
+- 平台：PWA，托管在 GitHub Pages。无构建步骤，无后端。第三方库放在 `vendor/`（本站加载，不用 CDN：jsDelivr 在中国打不开，2026-10-12 用户实测），固定版本号，来源 URL、许可证和 sha256 见 `vendor/README.md`，LICENSE 文件一起放进去。模型下载地址在 `config.js` 各模型的 `hosts`，按顺序尝试，网络错误时换下一个。
+- 国内（2026-10-12 用户实测，诊断页 `check.html`）：网页打不开 huggingface.co 和 hf-mirror.com（"Load failed"），能打开 GitHub Pages。
+  - 分类模型 SigLIP（Apache-2.0）放在自己的仓库 `Vincennes-Wang/closet-models`（Pages：https://vincennes-wang.github.io/closet-models/，目录结构和 HF 一样，固定版本，见该仓库 README）。`CLASSIFY_MODEL.hosts` 先用它，再用 HF。
+  - 抠图模型 RMBG 只在 HF，不转发（许可原文打不开，下载要填表）。国内下载不了时跳过抠图：本任务照片标为"未抠图"、保留原图，照常分类；下个任务再试。国内怎样抠图以后再议。
+  - "上次抠图"一行显示"分类模型 <域名>"。诊断页 `check.html`（"关于"区有链接）逐个检查本站文件和两个模型地址。
 - 放弃 Safari 26 以下的设备（iOS 17 实测跑不通，2026-10-12）。
 - 个人数据（衣物照片、搭配）只存在用户浏览器的 IndexedDB 中，绝不进仓库。
 - 应用内抠图：RMBG-1.4（`briaai/RMBG-1.4`，Bria 非商用许可，允许个人非商用使用）。模型 ID 只在 `config.js` 的 `MATTING_MODEL.id` 定义，换模型只改这一处。
@@ -128,7 +132,7 @@
 | 抠图（已放弃） | `onnx-community/BiRefNet_lite-ONNX` | MIT | fp16 114.5 MB / fp32 224 MB。模型卡示例里的 `onnx-community/BiRefNet_lite` 不存在。**Mac Chrome 上跑不通**：WebGPU 超出 storage buffer 上限（需 11，上限 10），WASM 内存不足；输入固定 1024² |
 | 抠图（对照） | `Xenova/modnet` | Apache-2.0 | fp16 13 MB / uint8 6.6 MB。人像抠图模型，衣物平铺图大量破洞，不可用 |
 | 抠图（应用内） | `briaai/RMBG-1.4` | Bria 非商用（模型卡："source-available model for non-commercial use"，Creative Commons 非商用；商用需与 Bria 签协议。卡片上的许可页链接 2026-10-10 返回 404） | fp16 88 MB / quantized 44 MB。Mac Chrome 效果最好，WebGPU 222 ms/张；iPhone（Safari 27）WebGPU fp16 可用，首张 1.6 s。小米手机（Chrome/Opera）WebGPU fp16、fp32 输出无效遮罩（结果全透明），WASM 正常，约 18 s/张；三星 Chrome、华为鸿蒙浏览器正常（2026-10-12） |
-| 分类 | `Marqo/marqo-fashionSigLIP` | Apache-2.0 | `SiglipTextModel` + `SiglipVisionModel`；vision fp16 186 MB / q4f16 54 MB / int8 94 MB，text fp16 221 MB。小米手机 WebGPU q4f16 分类结果离谱，WASM int8 正确，约 2 s/张（2026-10-12） |
+| 分类 | `Marqo/marqo-fashionSigLIP`（应用从 `closet-models` 仓库下载 q4f16 / int8 图像模型，HF 兜底） | Apache-2.0 | `SiglipTextModel` + `SiglipVisionModel`；vision fp16 186 MB / q4f16 54 MB / int8 94 MB，text fp16 221 MB。小米手机 WebGPU q4f16 分类结果离谱，WASM int8 正确，约 2 s/张（2026-10-12） |
 | 标签向量 | `label-embeddings.json`（根目录，应用用） | – | `node tools/embed.mjs` 用 fashionSigLIP fp32 文本模型生成，内容来自 `taxonomy.js`。改了英文 prompt 必须重新生成，测试会检查。`spike/label-embeddings.json` 只给 spike 用 |
 
 ## 目录
