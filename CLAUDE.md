@@ -9,6 +9,7 @@
 - 每个阶段结束时运行验证，报告结果。
 - 小步提交。不提交密钥、`.env`、`legacy/`、`private/`、模型文件和个人数据。
 - 每次工作结束前：按下面的格式更新 `PROGRESS.md`，提交并推送，然后运行 `git status -sb` 确认没有未推送的提交。
+- PROGRESS.md 只保留最近一次工作，不超过 60 行。更新前把上一次的记录移到 docs/HISTORY.md 顶部；已关闭的问题直接删除（结论写进 CLAUDE.md）。
 
 ## 交接清单
 以下情况，回复末尾必须输出交接清单：
@@ -52,11 +53,11 @@
 - 个人数据（衣物照片、搭配）只存在用户浏览器的 IndexedDB 中，绝不进仓库。
 - 应用内抠图：RMBG-1.4（`briaai/RMBG-1.4`，Bria 非商用许可，允许个人非商用使用）。模型 ID 只在 `config.js` 的 `MATTING_MODEL.id` 定义，换模型只改这一处。
 - 抠图是可选功能（2026-10-11 决策）：抠图失败或用户选"用原图"时，原图照常录入，应用完整可用。阶段 2a 在录入时批量抠图（队列），见下方"阶段计划"。仍接收透明 PNG（例如别处抠好的图）。
-- 备选方案：iOS 系统抠图（2026-10-11 用户真机验证可行，更正之前的"做不到"）。在"照片"里长按衣服，等系统抠出主体 → 菜单选"共享" → "保存图像"，得到透明 PNG，再在应用里录入。应用显示为棋盘格背景、`hasAlpha: true`。只作备选，主方案仍是应用内 RMBG。之前的"'文件'App 移除背景"说法不对，不要再用。应用内暂不加系统抠图提示。
+- 备选方案：iOS 系统抠图（2026-10-11 用户真机验证可行，更正之前的"做不到"）。在"照片"里长按衣服，等系统抠出主体 → 菜单选"共享" → "保存图像"，得到透明 PNG，再在应用里录入。应用显示为棋盘格背景、`hasAlpha: true`。只作备选，主方案仍是应用内 RMBG。之前的"'文件'App 移除背景"说法不对，不要再用。应用内暂不加系统抠图提示。粘贴导入（照片"拷贝主体"后粘贴）已取消（2026-10-11），用"保存图像"再选图录入代替。
 - 商用前置条件：如果以后收费或商用，必须先替换抠图模型，或购买 Bria 商业许可。替换候选（2026-10-10 核实）：`studioludens/birefnet-lite-512`（MIT，同类 `onnx-community/BiRefNet_512x512-ONNX` 也是 MIT）、`Xenova/slimsam-77-uniform`（SlimSAM，Apache-2.0，需要点选提示，不是全自动）。
 - 其他模型（分类等）仍优先选 MIT / Apache-2.0。
 - 页面"关于"区域注明使用了 RMBG-1.4 及其许可。
-- 分类在浏览器内运行：Transformers.js + WebGPU，WASM 兜底。手机端只加载 fashionSigLIP 图像模型；标签文字向量在 Mac 上预先算好，存为 `spike/label-embeddings.json`（不是个人数据，可以提交）。
+- 分类在浏览器内运行：Transformers.js + WebGPU，WASM 兜底。手机端只加载 fashionSigLIP 图像模型（q4f16），在 Worker 中运行；标签文字向量在 Mac 上预先算好，存为根目录 `label-embeddings.json`（不是个人数据，可以提交，见下方模型表）。阶段 0 在 iPhone 上 3/3 成功，约 210 ms/张。
 
 ### 阶段计划（2026-10-11 调整：先做 AI 录入，备份放后面）
 | 阶段 | 内容 | 验收 |
@@ -90,9 +91,8 @@
 
 ### 阶段 0 结论（2026-10-11）
 - iPhone 上 RMBG-1.4 的内存在整个页面生命周期内累积。终止 Worker 不能释放这部分内存。
-- 阶段 2a 接入 AI 抠图：每批 2 张（2026-10-11 由 3 张改为 2 张：第四次实测只抠图时第 3 张崩溃；2b 验收后再改为 1 张），结果存 IndexedDB，然后自动刷新页面续传下一批。
-- iOS 系统抠图恢复为备选（2026-10-11 更正），见上方"备选方案"。
-- 分类模型：fashionSigLIP q4f16，只加载图像模型，在 Worker 中运行（阶段 2b 接入）。
+- 所以抠图分批：每批结果存 IndexedDB，然后自动刷新页面续传下一批。每批张数见下方「阶段 2a 实现」的 `MATTING_PER_LOAD`。
+- 详细测试记录见 `docs/HISTORY.md`。
 
 ### 阶段 1 决策（2026-10-11）
 - 图片存储格式：长边缩到 1024，不存原图。有透明区域的图存 WebP；浏览器不能输出带透明的 WebP 时存 PNG。没有透明区域的图存 JPEG 0.9。启动时用 `image.js` 的 `probeWebpAlpha()` 检测，结果显示在页面"关于"区。
@@ -104,7 +104,7 @@
 - Safari 坑二（2026-10-11 确认，2a）：记录被改写后，改写前读出的 Blob 也读不出来（`createImageBitmap` 报 "An error occured reading the Blob argument"）。改写记录后要用改写后的新 Blob（`queue.js` 用 `markProcessing()` 的返回值）。
 
 ### 阶段 2a 实现（2026-10-11）
-- 配置只在 `config.js`：`MATTING_MODEL`、`MATTING_PER_LOAD`（每次加载抠几张，2026-10-11 由 2 改为 1，见 PROGRESS.md）、`MAX_ATTEMPTS`（同一张失败几次标为失败，默认 2）。
+- 配置只在 `config.js`：`MATTING_MODEL`、`MATTING_PER_LOAD`（每次加载抠几张。阶段 0 定 3 张；2026-10-11 改为 2 张：第四次实测只抠图时第 3 张崩溃；2b 验收时每页第 2 张崩溃过，再改为 1 张，见 `docs/HISTORY.md`）、`MAX_ATTEMPTS`（同一张失败几次标为失败，默认 2）。
 - `queue.js`：任务分两段（2b 起）：`phase = matting` 抠图，全部抠完刷新一次，`phase = classify` 分类（每次加载最多 `CLASSIFY_PER_LOAD` 张，2026-10-11 由 10 改为 6）。两段的差别都在 `PHASES` 里；等待、续传、崩溃恢复、时间线两段共用。队列记录的分类状态在 `classify` 字段（status、attempts、top3）。任务状态存 `meta.job`。页面加载时：`processing` 记录 = 上次崩溃，attempts+1；加载模型时连续崩溃 2 次自动暂停，防止无限刷新。
 - `model-worker.js`：抠图 Worker（复制自 `spike/rmbg-worker.js`）。后端由 `config.js` `pickBackend()` 选：没有 WebGPU，或 fp16 / q4f16 模型遇到显卡不支持 `shader-f16`（电脑 360 浏览器，2026-10-12），改用 WASM + `wasmDtype`。抠图结果不透明像素少于 `EMPTY_MASK_RATIO` 算空遮罩（小米手机 WebGPU，2026-10-12）：用 WebGPU 时本设备记住 `meta.device.noWebgpu`（旧键 `mattingNoWebgpu` 也认），刷新后用 WASM 重抠，以后抠图和分类都只用 WASM（小米 WebGPU 分类结果也离谱，`queue.js`）。测试用 `?fakeEmptyMask=1` 模拟。URL 加 `?fakeMatting=毫秒` 时不加载模型，测试用。
 - 全部抠完后再刷新一次，等 `RESULTS_DELAY_MS`（2 秒）再显示结果（iPhone 两次验收都在显示 12 张结果图时崩溃）。
