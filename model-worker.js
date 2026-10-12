@@ -2,6 +2,7 @@
 // 一个 Worker 只做一种任务（task）：matting = 抠图（RMBG），classify = 分类（fashionSigLIP 图像模型）。
 // 消息：init（加载模型）/ run（处理一张，ImageBitmap 以 transfer 方式传入）/ dispose（释放 ONNX session）
 // 测试用：init 时 fake 为数字，则不加载模型，每张等待 fake 毫秒后返回假结果
+import { pickBackend } from './config.js';
 const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
 let task = null, model = null, processor = null, spec = null, RawImage = null, fake = null, labels = null;
 
@@ -12,10 +13,13 @@ async function init({ task: initTask = 'matting', modelId, dtype, wasmDtype, inp
   const t = await import(TRANSFORMERS);
   t.env.allowLocalModels = false;
   RawImage = t.RawImage;
-  // Worker 里没有 WebGPU 时回退 WASM，并把实际后端报告给主线程
-  let device = 'wasm';
-  try { if (await navigator.gpu?.requestAdapter()) device = 'webgpu'; } catch { /* 无 */ }
-  const realDtype = device === 'webgpu' ? dtype : wasmDtype;
+  // Worker 里没有 WebGPU、或显卡不支持 fp16 时回退 WASM（见 config.js pickBackend），并把实际后端报告给主线程
+  const gpu = { webgpu: false, shaderF16: false };
+  try {
+    const adapter = await navigator.gpu?.requestAdapter();
+    if (adapter) { gpu.webgpu = true; gpu.shaderF16 = adapter.features.has('shader-f16'); }
+  } catch { /* 无 */ }
+  const { device, dtype: realDtype } = pickBackend(gpu, { dtype, wasmDtype });
   const t0 = performance.now();
   const opts = { device, dtype: realDtype, ...(config ? { config } : {}) };
   model = task === 'classify' ? await t.SiglipVisionModel.from_pretrained(modelId, opts) : await t.AutoModel.from_pretrained(modelId, opts);

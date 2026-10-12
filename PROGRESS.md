@@ -14,6 +14,15 @@
   - iOS 系统抠图：2026-10-11 先否决，同日更正为可行的备选（照片长按 → 共享 → 保存图像）。
 - 详细测试记录见文末"阶段 0 详细记录"。
 
+## 最近一次工作（2026-10-12，电脑 360 浏览器加载抠图模型失败）
+- 现象：第一次报 "Failed to fetch dynamically imported module"，第二次报 "The device (webgpu) does not support fp16"。
+- 错误 2 已确认原因并修复：transformers.js 4.3.1 用 WebGPU + fp16 前检查显卡是否支持 `shader-f16`，不支持就报错。我们原来只判断"有没有 WebGPU"。现在 `config.js` `pickBackend()` 一起检查：fp16 / q4f16 模型遇到不支持 fp16 的显卡时改用 WASM（抠图 quantized，分类 int8）。不用 WebGPU fp32，因为小米上 WebGPU fp32 也抠不出图。缓存名 `closet-v15`。
+- 错误 1 未确认：Worker 里唯一的动态加载是 jsDelivr 上的 transformers.js，第二次加载成功了，更可能是网络不稳定。另一个风险没有验证：模型从 huggingface.co 下载，在中国可能打不开。
+- 验证结果：
+  - `node --test tests/*.test.mjs` 22/22 通过。新增 `tests/config.test.mjs`（4 个测试，覆盖无 WebGPU、支持 fp16、不支持 fp16、不需要 fp16 的 dtype）。先写测试，确认失败后才写修复；测试还抓到一个 bug：`'fp16'` 不包含 `'f16'`。
+  - 浏览器测试（假模型）证明 Worker 能正常加载新的 `import './config.js'`。
+  - 真模型的 WASM 路径没在 Mac 上跑通验证：临时脚本连正常的 WebGPU 路径也卡住，说明是脚本本身的问题，已放弃。真正的验证要在 360 浏览器上做。
+
 ## 最近一次工作（2026-10-12，小米手机抠图结果只有黑白格）
 - 现象：小米手机（Chrome、Opera 都一样）录入 3 件，抠图、分类都"成功"，结果图只有黑白格，分类建议错误。iPhone、三星（Chrome）、华为平板（鸿蒙浏览器）正常。
 - 已确认原因：这台小米的 GPU 用 WebGPU 跑 RMBG 输出无效遮罩（spike 页强制 WebGPU 时 fp16、fp32 都没有衣服，强制 WASM 正常）。应用里 `model-worker.js` 直接用遮罩当 alpha，没检查遮罩是否为空，所以整张透明；分类看到的是白纸，建议也错。
@@ -188,11 +197,13 @@
   - 390×844 截图检查首页和编辑弹窗。
 
 ## 下次从这里继续
-1. 阶段 3 备份：Plan mode 给计划，用户确认后写代码。
-2. 下次 iPhone 录入时顺便看分类每页 6 张后是否还崩溃（看"详细记录"）。
-3. iPhone 看一眼页头文字和照片占用是否合理。
+1. 360 浏览器重试："上次抠图"那行最后应显示 `wasm/quantized`，图片里应有衣服。再看下面两个链接在中国能否打开：huggingface.co 上 RMBG-1.4 的 config.json、jsDelivr 上 transformers 的 package.json。打不开就要决定是否改用国内镜像（例如 hf-mirror.com）。
+2. 阶段 3 备份：Plan mode 给计划，用户确认后写代码。
+3. 下次 iPhone 录入时顺便看分类每页 6 张后是否还崩溃（看"详细记录"）。
+4. iPhone 看一眼页头文字和照片占用是否合理。
 
 ## 未解决问题
+- 中国网络（2026-10-12）：huggingface.co、jsDelivr 能否访问未确认；360 浏览器第一次报 "Failed to fetch dynamically imported module"，原因未确认。
 - 小米手机 WebGPU 抠图结果全透明（2026-10-12，见上）：暂不修。以后要修的两个方案：遮罩几乎全空时判为抠图失败、保留原图；或检测到空遮罩后本设备改用 WASM。
 - ~~iPhone 上偶发崩溃，需要左划~~ — 基本解决（2026-10-11）：抠图每批 1 张后抠图阶段 0 崩溃；分类阶段崩溃 1 次已自动恢复，每页改为 6 张，待下次录入时观察。
 - 交付前："关于"区的存图格式诊断（`app.js` `showDiag`）没必要就删除。

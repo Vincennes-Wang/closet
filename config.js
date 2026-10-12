@@ -10,6 +10,14 @@ export const MATTING_MODEL = {
 // 分类模型：手机端只加载图像模型（q4f16，54 MB）；标签文字向量在 Mac 上预先算好（label-embeddings.json）
 export const CLASSIFY_MODEL = { id: 'Marqo/marqo-fashionSigLIP', dtype: 'q4f16', wasmDtype: 'int8' };
 
+// 选后端：有 WebGPU 用 dtype，否则 WASM + wasmDtype。
+// fp16 类 dtype 还要显卡支持 shader-f16，否则 transformers.js 报 "The device (webgpu) does not support fp16"
+// （2026-10-12 电脑 360 浏览器）。这时改用 WASM，不用 WebGPU fp32：小米手机上 WebGPU fp32 也抠不出图
+export function pickBackend({ webgpu, shaderF16 }, { dtype, wasmDtype }) {
+  const needsF16 = ['fp16', 'q4f16'].includes(dtype);
+  return webgpu && (shaderF16 || !needsF16) ? { device: 'webgpu', dtype } : { device: 'wasm', dtype: wasmDtype };
+}
+
 // 每次页面加载最多分类几张。2026-10-11 由 10 改为 6：iPhone 两次在"分类 10 张的页面"之后的下一页崩溃。
 // 12 张仍是两页（6 + 6），每页负担小一些
 export const CLASSIFY_PER_LOAD = 6;
