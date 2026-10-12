@@ -4,6 +4,7 @@
 // 任务状态存在 IndexedDB 的 job 里，刷新或崩溃后从这里接着做。
 import {
   MATTING_MODEL, MATTING_PER_LOAD, CLASSIFY_MODEL, CLASSIFY_PER_LOAD, MAX_ATTEMPTS, THUMB_SIDE, LOAD_DELAY_MS, EMPTY_MASK_ERROR,
+  ESTIMATE_MS, pickBackend,
 } from './config.js';
 
 // 两段的差别都在这里：用哪个模型、每次加载几张、怎么判断"待处理 / 处理中"、怎么记成功和失败
@@ -38,11 +39,42 @@ const PHASES = {
   },
 };
 
-// 本次任务包含的记录：开始时所有还要抠图或分类的照片
-export async function startJob(store) {
+// 开始前猜本设备抠图用哪个后端（'webgpu' | 'wasm'），只用来估算用时。判断方法和 model-worker.js 一致
+export async function guessBackend(store) {
+  const device = await store.getDevice();
+  if (device.noWebgpu || device.mattingNoWebgpu) return 'wasm';
+  const gpu = { webgpu: false, shaderF16: false };
+  try {
+    const adapter = await navigator.gpu?.requestAdapter();
+    if (adapter) { gpu.webgpu = true; gpu.shaderF16 = adapter.features.has('shader-f16'); }
+  } catch { /* 无 */ }
+  return pickBackend(gpu, MATTING_MODEL).device;
+}
+
+// 用时估算。开始前：张数 × 经验值。处理中：本段已完成的照片用实际平均（job.timing，刷新后仍在），还没有时用经验值；
+// 抠图段再加上分类段的估算
+export const estimateMs = (n, backend) => n * (ESTIMATE_MS[backend].matting + ESTIMATE_MS[backend].classify);
+export function remainingMs(job, p) {
+  const est = ESTIMATE_MS[job.estBackend ?? 'webgpu'];
+  const avg = (k) => (job.timing?.[k]?.n ? job.timing[k].ms / job.timing[k].n : est[k]);
+  const classifyLeft = (p.total - p.classifyProcessed) * avg('classify');
+  return p.phase === 'classify' ? classifyLeft : (p.total - p.processed) * avg('matting') + classifyLeft;
+}
+export const minutesText = (ms) => (ms < 60000 ? '不到 1 分钟' : `${Math.ceil(ms / 60000)} 分钟`);
+
+// 本段开始计时（since）；每张处理完（成功或失败）记一次：n 张，从开始到现在 ms（含刷新、等待、加载模型）
+const startTiming = (store, k) => store.setJob((j) => ({ timing: { ...j.timing, [k]: { since: Date.now(), n: 0, ms: 0 } } }));
+const tick = (store, k) => store.setJob((j) => {
+  const t = j.timing?.[k] ?? { since: j.startedAt, n: 0 };
+  return { timing: { ...j.timing, [k]: { ...t, n: t.n + 1, ms: Date.now() - t.since } } };
+});
+
+// 本次任务包含的记录：开始时所有还要抠图或分类的照片。estBackend：开始前猜的后端，估算用时用
+export async function startJob(store, estBackend = 'webgpu') {
   const ids = (await store.listQueue()).filter((r) => r.status === 'pending' || r.classify?.status === 'pending').map((r) => r.id);
   return store.setJob({
     phase: 'matting', running: true, paused: false, ids, startedAt: Date.now(), endedAt: null,
+    estBackend, timing: { matting: { since: Date.now(), n: 0, ms: 0 } },
     reloads: 0, recoveries: 0, loading: false, loadCrashes: 0, error: '', events: [{ t: Date.now(), e: 'start', n: ids.length }],
   });
 }
@@ -226,6 +258,7 @@ export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, o
         }
         await log(store, { e: 'error', k: P.task, i: indexOf(job, r.id), msg: err.message });
       }
+      await tick(store, P.task);
       onChange();
     }
   } catch (err) {
@@ -257,6 +290,7 @@ export async function resumeQueue(store, { fake = null, fakeEmptyMask = false, o
 async function nextPhase(store, P, { onChange, reload, ranModel = false }) {
   if (P.task === 'matting') {
     await store.setJob({ phase: 'classify' });
+    await startTiming(store, 'classify');
     await log(store, { e: 'phase' });
     reload();
     return 'reloading';

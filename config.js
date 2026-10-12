@@ -48,5 +48,13 @@ export const LOAD_DELAY_MS = 3000;
 export const EMPTY_MASK_RATIO = 0.01;
 export const EMPTY_MASK_ERROR = '遮罩为空，没有抠出衣服';
 
+// 每张照片的经验耗时（毫秒），含刷新、等待、加载模型。开始前估算总用时用；处理中有实际耗时后改用实际平均。
+// webgpu：iPhone 2b 验收 12 张 94 s（抠图每页约 6 s，分类两页约 22 s）。
+// wasm：小米手机（2026-10-12）抠图约 18 s + 等 3 s + 加载模型；分类约 2 s + 每页加载
+export const ESTIMATE_MS = {
+  webgpu: { matting: 6000, classify: 2000 },
+  wasm: { matting: 25000, classify: 4000 },
+};
+
 // 同一张图失败（页面崩溃或模型报错）达到这个次数，标为抠图失败，保留原图
 export const MAX_ATTEMPTS = 2;

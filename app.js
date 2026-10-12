@@ -3,7 +3,10 @@ import { CATEGORIES, getNode, split, seasonsFor, labelOf } from './taxonomy.js';
 import { openStore, groupByCategory } from './store.js';
 import { prepareImage, probeWebpAlpha, makeThumb } from './image.js';
 import { THUMB_SIDE, RESULTS_DELAY_MS } from './config.js';
-import { startJob, pauseJob, continueJob, cancelJob, summarize, resumeQueue, eventLines, noteResultsLoad, noteWait, noteResultsShown } from './queue.js';
+import {
+  startJob, pauseJob, continueJob, cancelJob, summarize, resumeQueue, eventLines, noteResultsLoad, noteWait, noteResultsShown,
+  guessBackend, estimateMs, remainingMs, minutesText,
+} from './queue.js';
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...children) => {
@@ -186,7 +189,7 @@ async function renderQueue() {
     const p = summarize(job, queue);
     box.replaceChildren(el('div', { className: 'card' },
       el('h2', { textContent: job.paused ? '处理已暂停' : job.phase === 'classify' ? '正在分类' : '正在抠图' }),
-      el('p', { id: 'progress', textContent: progressText(p) }),
+      el('p', { id: 'progress', textContent: `${progressText(p)}${job.paused ? '' : ` · 剩余${remainingMs(job, p) < 60000 ? '' : '约 '}${minutesText(remainingMs(job, p))}`}` }),
       job.paused ? '' : el('p', { className: 'hint', textContent: '处理中请保持页面在前台，屏幕不要锁定。页面会自动刷新，不用操作。如果出现"重复出现问题"，向左划回来即可继续。' }),
       !job.paused && job.events?.at(-1)?.e === 'loadWait' ? el('p', { className: 'muted', textContent: '正在释放内存，稍后继续…' }) : '',
       el('p', { className: 'error', textContent: job.error ?? '' }),
@@ -200,6 +203,8 @@ async function renderQueue() {
   }
   const waiting = queue.filter((r) => r.status === 'pending' || r.classify?.status === 'pending').length;
   const p = job?.endedAt ? summarize(job, queue) : null;
+  // 开始前按本设备后端估算用时；只在 WASM（慢）时提示
+  const backend = waiting ? await guessBackend(store) : null;
   const cards = queue.map(reviewCard);
   const ready = () => cards.filter((c) => c.choice());
   // 全部确认：只确认已有分类的；没有分类建议、又没手动选的留在列表里
@@ -216,8 +221,10 @@ async function renderQueue() {
     el('h2', { textContent: `待确认 · ${queue.length}` }),
     p ? el('p', { className: 'muted', id: 'lastJob', textContent: `上次抠图：成功 ${p.done}，失败 ${p.failed}，取消 ${p.skipped} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}${p.backend ? ` · ${p.backend}` : ''} · 分类 ${p.classified} 张，失败 ${p.classifyFailed}` }) : '',
     p ? timeline(job) : '',
+    backend === 'wasm' ? el('p', { className: 'hint', id: 'slowHint',
+      textContent: `这台设备处理较慢，${waiting} 张约需 ${minutesText(Math.max(60000, estimateMs(waiting, backend)))}，处理中请保持本页面打开` }) : '',
     waiting ? el('div', { className: 'actions' },
-      queueButton(`开始处理（${waiting} 张）`, async () => { await startJob(store); location.reload(); }, 'primary')) : '',
+      queueButton(`开始处理（${waiting} 张）`, async () => { await startJob(store, backend); location.reload(); }, 'primary')) : '',
     queue.some((r) => r.classify?.status === 'done') ? el('div', { className: 'actions' }, confirmAll) : '',
     el('div', { className: 'reviews' }, ...cards.map((c) => c.node)))] : []));
 }

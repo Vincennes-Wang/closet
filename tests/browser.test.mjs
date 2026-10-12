@@ -377,3 +377,31 @@ test('抠图队列：WebGPU 遮罩全空时，这台设备改用 WASM 重抠，�
   assert.equal(st.job.classifyBackend, 'wasm/fake');
   assert.equal(st.job.events.filter((v) => v.e === 'noWebgpu').length, 0);
 });
+
+// 慢速提示：WASM 设备开始前提示估算用时；处理中显示剩余时间，刷新后仍能算（存在 meta.job.timing）
+test('慢速提示：WASM 设备开始前显示估算；处理中显示剩余时间；WebGPU 设备不显示估算', async () => {
+  await openWithQueue(3, 1500);
+  // 无头 Chrome 有 WebGPU（支持 shader-f16）：不显示慢速提示
+  assert.equal(await chrome.evaluate(`document.getElementById('slowHint')`), null);
+
+  await chrome.evaluate(`(async () => {
+    const { openStore } = await import('/store.js');
+    const s = await openStore(); await s.setDevice({ noWebgpu: true }); s.close();
+  })()`);
+  await chrome.reload();
+  await chrome.waitFor(`document.getElementById('slowHint')`);
+  const { ESTIMATE_MS } = await import('../config.js');
+  const min = Math.ceil(3 * (ESTIMATE_MS.wasm.matting + ESTIMATE_MS.wasm.classify) / 60000);
+  assert.equal(await chrome.evaluate(`document.getElementById('slowHint').textContent`),
+    `这台设备处理较慢，3 张约需 ${min} 分钟，处理中请保持本页面打开`);
+
+  await chrome.evaluate(clickButton('#queue', '开始处理（3 张）'));
+  // 第 1 张抠完、自动刷新后：剩余时间来自本次任务的实际耗时
+  await chrome.waitFor(`(${QUEUE_STATE}).then((s) => s.job.reloads >= 1 && s.job.timing?.matting?.n >= 1)`, 30000);
+  await chrome.waitFor(`/剩余(约 \\d+ 分钟|不到 1 分钟)/.test(document.getElementById('progress')?.textContent)`, 10000);
+  const st = await chrome.evaluate(QUEUE_STATE);
+  assert.equal(st.job.estBackend, 'wasm');
+  assert.ok(st.job.timing.matting.ms > 0);
+  await chrome.waitFor(`document.getElementById('lastJob')`, 60000);
+  assert.ok((await chrome.evaluate(QUEUE_STATE)).job.timing.classify.n >= 1);
+});
