@@ -125,7 +125,7 @@
 | 运行库 | `@huggingface/transformers@4.3.1`（jsDelivr `dist/transformers.min.js`） | Apache-2.0 | 浏览器缓存默认开启（Cache API `transformers-cache`）。不要用 `transformers.web.min.js`：它含裸模块名 `onnxruntime-web/webgpu`，浏览器无法解析 |
 | 抠图（已放弃） | `onnx-community/BiRefNet_lite-ONNX` | MIT | fp16 114.5 MB / fp32 224 MB。模型卡示例里的 `onnx-community/BiRefNet_lite` 不存在。**Mac Chrome 上跑不通**：WebGPU 超出 storage buffer 上限（需 11，上限 10），WASM 内存不足；输入固定 1024² |
 | 抠图（对照） | `Xenova/modnet` | Apache-2.0 | fp16 13 MB / uint8 6.6 MB。人像抠图模型，衣物平铺图大量破洞，不可用 |
-| 抠图（应用内） | `briaai/RMBG-1.4` | Bria 非商用（模型卡："source-available model for non-commercial use"，Creative Commons 非商用；商用需与 Bria 签协议。卡片上的许可页链接 2026-10-10 返回 404） | fp16 88 MB / quantized 44 MB。Mac Chrome 效果最好，WebGPU 222 ms/张；iPhone（Safari 27）WebGPU fp16 可用，首张 1.6 s |
+| 抠图（应用内） | `briaai/RMBG-1.4` | Bria 非商用（模型卡："source-available model for non-commercial use"，Creative Commons 非商用；商用需与 Bria 签协议。卡片上的许可页链接 2026-10-10 返回 404） | fp16 88 MB / quantized 44 MB。Mac Chrome 效果最好，WebGPU 222 ms/张；iPhone（Safari 27）WebGPU fp16 可用，首张 1.6 s。小米手机（Chrome/Opera）WebGPU fp16、fp32 输出无效遮罩（结果全透明），WASM 正常；三星 Chrome、华为鸿蒙浏览器正常（2026-10-12） |
 | 分类 | `Marqo/marqo-fashionSigLIP` | Apache-2.0 | `SiglipTextModel` + `SiglipVisionModel`；vision fp16 186 MB / q4f16 54 MB / int8 94 MB，text fp16 221 MB |
 | 标签向量 | `label-embeddings.json`（根目录，应用用） | – | `node tools/embed.mjs` 用 fashionSigLIP fp32 文本模型生成，内容来自 `taxonomy.js`。改了英文 prompt 必须重新生成，测试会检查。`spike/label-embeddings.json` 只给 spike 用 |
 
