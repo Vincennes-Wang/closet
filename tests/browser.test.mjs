@@ -447,3 +447,152 @@ test('模型地址：closet-models 下载不了时，分类改用 huggingface.co
   assert.deepEqual(st.statuses, ['cutout_done']);
   assert.equal(st.job.classifyHost, 'huggingface.co');
 });
+
+// ---------- 备份（阶段 3） ----------
+// 数据库快照：衣物（含图片字节）+ 分类表，按 id 排序
+const SNAPSHOT = `(async () => {
+  const { openStore } = await import('/store.js');
+  const s = await openStore(); const d = await s.exportData(); s.close();
+  const byId = (a, b) => (a.id < b.id ? -1 : 1);
+  const items = await Promise.all(d.items.sort(byId).map(async (it) => ({ ...it, image: { type: it.image.type, bytes: Array.from(new Uint8Array(await it.image.arrayBuffer())) } })));
+  return { items, categories: d.categories.sort(byId) };
+})()`;
+
+// 页面里准备数据：3 件衣物（1 张透明 PNG，1 件已归档）+ 分类表 2 条（自建 1 条、内置改名 + 隐藏 1 条）
+const SEED = `(async () => {
+  const { openStore } = await import('/store.js');
+  const s = await openStore();
+  const img = async (type, alpha, w) => {
+    const c = new OffscreenCanvas(w, 40); const x = c.getContext('2d');
+    if (!alpha) { x.fillStyle = '#ddd'; x.fillRect(0, 0, w, 40); }
+    x.fillStyle = '#336'; x.fillRect(5, 5, 20, 20);
+    return c.convertToBlob({ type, quality: 0.9 });
+  };
+  await s.add({ image: await img('image/png', true, 50), hasAlpha: true, categoryId: 'top', subcategoryId: 'top.casual_tee', seasons: ['夏'], scenes: ['休闲'], name: '白T', color: '白' });
+  await s.add({ image: await img('image/jpeg', false, 60), hasAlpha: false, categoryId: 'bottom', subcategoryId: 'bottom.jeans', seasons: [], scenes: [] });
+  const c = await s.add({ image: await img('image/webp', true, 70), hasAlpha: true, categoryId: 'bag', subcategoryId: null, seasons: ['冬'], scenes: [] });
+  await s.archive(c.id);
+  await s.putCategoryRow({ id: 'u1', parentId: 'top', zh: 'polo', hidden: false, builtin: false });
+  await s.putCategoryRow({ id: 'top.vest', zh: '吊带', hidden: true });
+  s.close();
+})()`;
+
+// 在页面里生成备份 ZIP（和"导出备份"按钮用同一个函数），存在 window.__zip；edit(manifest, files) 可篡改
+const MAKE_BACKUP = (edit = '') => `(async () => {
+  const { openStore } = await import('/store.js');
+  const { buildBackup, readZip, makeZip } = await import('/backup.js');
+  const s = await openStore(); const { blob } = await buildBackup(s); s.close();
+  let zip = blob;
+  ${edit ? `{
+    const files = await readZip(blob);
+    const manifest = JSON.parse(await files.get('manifest.json').text());
+    (${edit})(manifest, files);
+    zip = await makeZip([{ name: 'manifest.json', blob: new Blob([JSON.stringify(manifest)]) }, ...[...files].filter(([n]) => n !== 'manifest.json').map(([name, blob]) => ({ name, blob }))]);
+  }` : ''}
+  window.__zip = zip;
+  return zip.size;
+})()`;
+
+// 通过界面导入 window.__zip，返回提示文字
+const IMPORT_VIA_UI = `(async () => {
+  const dt = new DataTransfer();
+  dt.items.add(new File([window.__zip], 'closet-backup.zip', { type: 'application/zip' }));
+  const input = document.getElementById('importInput');
+  input.files = dt.files;
+  document.getElementById('backupMsg').textContent = '';
+  input.dispatchEvent(new Event('change'));
+  for (let i = 0; i < 100 && /^(正在|$)/.test(document.getElementById('backupMsg').textContent); i++) await new Promise((ok) => setTimeout(ok, 100));
+  return document.getElementById('backupMsg').textContent;
+})()`;
+
+const deleteDb = `new Promise((ok) => { const d = indexedDB.deleteDatabase('closet'); d.onsuccess = d.onerror = ok; })`;
+
+test('备份：导出 → 清空 → 导入，衣物、分类表、图片字节完全一致；再导入一次全部跳过', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.evaluate(SEED);
+  const before = await chrome.evaluate(SNAPSHOT);
+  assert.equal(before.items.length, 3);
+  assert.equal(before.items.filter((i) => i.archived).length, 1);
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  await chrome.evaluate(MAKE_BACKUP());
+  // 清空：删数据库后重新打开应用。ZIP 先转成 base64 带到新页面
+  const zipB64 = await chrome.evaluate(`(async () => { const b = new Uint8Array(await window.__zip.arrayBuffer()); let s = ''; for (const x of b) s += String.fromCharCode(x); return btoa(s); })()`);
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.evaluate(deleteDb);
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  assert.equal(await chrome.evaluate(`document.querySelectorAll('#closet .tile').length`), 0);
+  await chrome.evaluate(`window.__zip = new Blob([Uint8Array.from(atob('${zipB64}'), (c) => c.charCodeAt(0))])`);
+  assert.equal(await chrome.evaluate(IMPORT_VIA_UI), '新增 3 件，跳过 0 件');
+  assert.deepEqual(await chrome.evaluate(SNAPSHOT), before);
+  await chrome.waitFor(`document.querySelectorAll('#closet .tile').length === 2`); // 已归档的不显示
+  assert.equal(await chrome.evaluate(IMPORT_VIA_UI), '新增 0 件，跳过 3 件');
+  assert.deepEqual(await chrome.evaluate(SNAPSHOT), before);
+});
+
+test('备份：版本不对、缺图片、分类不存在，都整体失败，数据库不变', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.evaluate(SEED);
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  // 备份里的衣物换成新 id（否则已存在会被跳过，看不出是否整体失败）；坏的放在最后一件
+  const renew = `(m, files) => { for (const it of m.items) { const f = files.get(it.image); files.delete(it.image); it.id = 'new-' + it.id; it.image = it.image.replace('images/', 'images/new-'); files.set(it.image, f); } }`;
+  const cases = [
+    [`(m, files) => { (${renew})(m, files); m.formatVersion = 2; }`, /^导入失败：不认识的备份版本：2$/],
+    [`(m, files) => { (${renew})(m, files); files.delete(m.items.at(-1).image); }`, /^导入失败：第 3 件衣物缺少图片/],
+    [`(m, files) => { (${renew})(m, files); m.items.at(-1).categoryId = 'top'; m.items.at(-1).subcategoryId = 'top.nope'; }`, /^导入失败：第 3 件衣物.*top\.nope/],
+  ];
+  const before = await chrome.evaluate(SNAPSHOT);
+  for (const [edit, msg] of cases) {
+    await chrome.evaluate(MAKE_BACKUP(edit));
+    assert.match(await chrome.evaluate(IMPORT_VIA_UI), msg);
+    assert.deepEqual(await chrome.evaluate(SNAPSHOT), before);
+  }
+  // 对照：同样换新 id、不篡改时能导入（证明上面的失败不是因为换 id）
+  await chrome.evaluate(MAKE_BACKUP(renew));
+  assert.equal(await chrome.evaluate(IMPORT_VIA_UI), '新增 3 件，跳过 0 件');
+});
+
+test('备份：页头显示上次备份时间，超过 7 天用提醒样式', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  assert.equal(await chrome.evaluate(`document.getElementById('backupAge').textContent`), '还没有备份');
+  assert.equal(await chrome.evaluate(`document.getElementById('backupAge').classList.contains('warn')`), false); // 没有衣物时不提醒
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.evaluate(SEED);
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  assert.equal(await chrome.evaluate(`document.getElementById('backupAge').classList.contains('warn')`), true); // 有衣物、从未备份
+  await chrome.evaluate(`document.getElementById('exportBtn').click()`);
+  await chrome.waitFor(`document.getElementById('backupAge').textContent === '上次备份：今天'`);
+  assert.equal(await chrome.evaluate(`document.getElementById('backupAge').classList.contains('warn')`), false);
+  assert.match(await chrome.evaluate(`document.getElementById('backupMsg').textContent`), /^已导出 3 件/);
+  await chrome.evaluate(`(async () => {
+    const { openStore } = await import('/store.js');
+    const s = await openStore(); await s.setBackupAt(Date.now() - 8 * 86400000); s.close();
+  })()`);
+  await chrome.reload();
+  await chrome.waitFor(`document.getElementById('backupAge').textContent === '上次备份：8 天前'`);
+  assert.equal(await chrome.evaluate(`document.getElementById('backupAge').classList.contains('warn')`), true);
+});
+
+test('备份：importData 写入中途出错时整个事务回滚', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.evaluate(SEED);
+  const before = await chrome.evaluate(SNAPSHOT);
+  const err = await chrome.evaluate(`(async () => {
+    const { openStore } = await import('/store.js');
+    const s = await openStore();
+    const image = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+    const ok = { id: 'new-1', createdAt: 1, image, hasAlpha: true, name: '', categoryId: 'bag', subcategoryId: null, seasons: [], scenes: [], color: '', archived: false };
+    try { await s.importData({ items: [ok, { ...ok, id: undefined }], categories: [{ id: 'u9', parentId: null, zh: 'x', builtin: false }] }); return 'no error'; }
+    catch (e) { return e.name; } finally { s.close(); }
+  })()`);
+  assert.equal(err, 'DataError');
+  assert.deepEqual(await chrome.evaluate(SNAPSHOT), before);
+});

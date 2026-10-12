@@ -69,7 +69,7 @@
 |---|---|---|
 | 2a | 批量抠图队列：选图 → 存队列 → 每次页面加载抠 K 张（默认 2）→ 自动刷新续传；崩溃恢复、暂停、取消、屏幕常亮 | iPhone（主屏幕图标打开，普通模式）一次选 12 张，不手动操作，全部处理完；报告成功数、失败数、自动刷新次数、崩溃恢复次数、总耗时 |
 | 2b | 二级分类 + 待确认列表：`taxonomy.js`、Mac 端生成标签向量脚本、Worker 分类（每次加载最多 M 张，默认 10）、待确认列表 | iPhone 一次选 12 张，从选图到全部进入待确认列表不手动操作；20 张样本的准确率报告 |
-| 3 | 备份（导出 / 导入） | |
+| 3 | 备份（导出 / 导入） | Mac Safari、iPhone 导出 → 清空 → 导入全部恢复；再导入全部跳过 |
 | 4 | 衣橱筛选 + 槽位式搭配；分类管理界面 | |
 | 5 | 下周穿搭：周日排好下周每天穿什么，参考天气预报 | |
 | 6 | 交付 | |
@@ -121,6 +121,14 @@
 - 发布后第一次打开，Service Worker 先给旧文件、后台更新，第二次打开才是新版（Safari 实测）。验收前先打开一次、完全关掉再开。
 - 选图时透明图直接算"已抠图"。取消后剩下的标为"未抠图"，保留原图。处理完的照片进待确认列表（`app.js` `reviewCard`）：建议分类 + 另外 2 个候选、其他分类、季节、"用原图"、确认 / 全部确认。确认用 `store.confirmQueued()`：同一个事务里新建衣物、删除队列记录，图片只存一份。新录入只走这条路；`itemFields` 只用于编辑。
 
+### 阶段 3 备份（2026-10-12）
+- `backup.js`：自己写的 ZIP（只存储、不压缩，CRC32），不加依赖。导出时逐个读图算 CRC，拼接用原始 Blob；导入用 `blob.slice` 逐个取文件并校验 CRC，不把整个 ZIP 读进内存。
+- 格式 `formatVersion: 1`：`manifest.json`（formatVersion、exportedAt、appVersion = SW 缓存名、dbVersion、itemCount、全部衣物记录含已归档、categories 表全部记录；图片字段写成 ZIP 内文件名）+ `images/<id>.webp|png|jpg`。不导出 queue、meta（job、device、backup）。
+- 导入：先 `parseBackup()` 全部校验（版本、衣物字段 `store.validate()`、分类 `taxonomy.js` `categoryError()`（内置组合或备份里的自建分类）、每张图存在且 CRC 正确），再 `store.importData()` 一个事务写入。合并：衣物和分类记录 id 已存在就跳过（不覆盖本机修改）。任何一步失败数据库不变。图片复制成新 Blob 再写入（Safari 坑）。
+- 改了衣物字段（`store.js` `newItem()`）必须同时改 `backup.js` `FIELDS`，`FORMAT_VERSION` 加 1，并保留旧版本的导入。
+- 导出：手机（`pointer: coarse` 且支持 `navigator.canShare({ files })`）用分享菜单（iPhone"存储到文件"），其他用下载。分享报 NotAllowedError（生成 ZIP 太久，不再算用户点击）时显示"保存备份文件"按钮让用户再点一次。分享成功或已下载才记录备份时间（`meta.backup`，本机，不导出）。
+- 页头"上次备份：今天 / N 天前 / 还没有备份"；超过 7 天、或有衣物却从未备份时用提醒色 `--warn`。处理照片时隐藏备份卡片。
+
 ### 配色（2026-10-11）
 - 阿根廷蓝白：`style.css` 顶部的变量。天蓝 `#74acdf` 用于国旗条和选中状态（配墨蓝字）；深蓝 `#1f5a8e` 用于操作按钮（白字）；金色 `#f6b40e` 只用在页头的五月太阳。页头是简化国旗（上下天蓝条 + 白底）。
 - 图标是白色衣架 + 天蓝底。iPhone 主屏幕图标要删掉后重新"添加到主屏幕"才会更新。
@@ -136,7 +144,7 @@
 | 标签向量 | `label-embeddings.json`（根目录，应用用） | – | `node tools/embed.mjs` 用 fashionSigLIP fp32 文本模型生成，内容来自 `taxonomy.js`。改了英文 prompt 必须重新生成，测试会检查。`spike/label-embeddings.json` 只给 spike 用 |
 
 ## 目录
-- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`sw.js`、`manifest.webmanifest`、`icons/`）。
+- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`backup.js` 备份 ZIP、`check.html` 网络检查、`sw.js`、`manifest.webmanifest`、`icons/`）。
 - `vendor/`：第三方库（transformers.js、ONNX Runtime），见 `vendor/README.md`。
 - `docs/HISTORY.md`：PROGRESS.md 移出的旧记录。
 - `tests/`：`node --test tests/*.test.mjs`。`store.test.mjs` 测纯函数；`browser.test.mjs` 用 headless Chrome（CDP，`tests/cdp.mjs`，无依赖）测真实 IndexedDB、录入流程、抠图队列（假模型）和离线打开。模拟崩溃用"处理中直接重新打开页面"，不用 CDP `Page.crash`（装了 Service Worker 后崩溃后的导航不返回）。需要本机装有 Chrome。

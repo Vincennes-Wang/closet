@@ -84,6 +84,19 @@ export function isValidPair(categoryId, subcategoryId) {
   return c.subs.some((s) => s.id === subcategoryId);
 }
 
+// 分类校验（含自建分类）。rows：分类表记录（见 visibleTaxonomy）。合法返回 null，否则返回中文错误。
+// 内置组合按 isValidPair；自建一级（parentId 为 null）可以不选二级；自建二级的 parentId 必须是所选一级
+export function categoryError({ categoryId, subcategoryId }, rows = []) {
+  if (isValidPair(categoryId, subcategoryId)) return null;
+  const custom = new Map(rows.filter((r) => r.builtin === false).map((r) => [r.id, r]));
+  const builtinTop = getNode(categoryId) && !getNode(categoryId).categoryId;
+  const customTop = custom.get(categoryId) && !custom.get(categoryId).parentId;
+  if (!builtinTop && !customTop) return `分类无效：一级分类 ${categoryId} 不存在`;
+  if (subcategoryId === null || subcategoryId === undefined) return customTop ? null : `分类无效：${categoryId} 需要选二级分类`;
+  if (custom.get(subcategoryId)?.parentId === categoryId) return null;
+  return `分类无效：二级分类 ${subcategoryId} 不存在或不属于 ${categoryId}`;
+}
+
 // 界面显示的分类 = 内置 + 用户自建 − 隐藏，并应用改名。
 // rows：IndexedDB categories 仓库的记录 { id, parentId|null, zh, hidden, builtin: false } 或对内置的 { id, zh?, hidden? }
 export function visibleTaxonomy(rows = []) {

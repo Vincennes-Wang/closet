@@ -2,6 +2,20 @@
 
 PROGRESS.md 移出的旧记录，按日期倒序，原文未改。
 
+## 最近一次工作（2026-10-12，国内：分类模型放 closet-models，抠图跳过）
+- 诊断结果（国内 iPhone iOS 18.7，Safari 27，check.html）：GitHub Pages 正常（27 MB 用 5.4 s）；huggingface.co、hf-mirror.com 全部 `TypeError: Load failed`。
+- 用户决定：国内先不抠图，以后再议；SigLIP 放新仓库；RMBG 不转发。
+- 完成：
+  - 新仓库 `Vincennes-Wang/closet-models`（公开，Pages 已开）：SigLIP `config.json`、`preprocessor_config.json`、`vision_model_q4f16.onnx`（54 MB）、`vision_model_int8.onnx`（94 MB），固定 HF 版本 `c56244c`，含 Apache-2.0 LICENSE 和 README（来源、sha256）。
+  - `config.js`：每个模型自带 `hosts`。分类：closet-models → HF；抠图：只有 HF。删掉 hf-mirror.com 和"本设备记住地址"。
+  - 抠图模型网络错误时不再暂停：本任务照片标为"未抠图"（保留原图），时间线记"抠图模型下载不了，跳过抠图"，刷新后分类。下个任务再试一次。
+  - "上次抠图"一行：`取消` 改为 `未抠图`，末尾显示"分类模型 <域名>"。check.html 换成 closet-models + HF 两组。缓存名 `closet-v20`。
+- 验证结果：
+  - `node --test tests/*.test.mjs` 29/29 通过。改写 / 新增 2 个浏览器测试（先确认失败再实现）：HF 失败时抠图全部跳过、不暂停、分类完成、分类来自 github.io；closet-models 失败时分类改用 HF。
+  - closet-models 线上 4 个文件：HTTP 200，大小、sha256 与 HF 的 LFS 记录一致，`access-control-allow-origin: *`。
+  - 模拟国内（Mac Chrome 真模型，huggingface.co、*.hf.co、hf-mirror.com、jsDelivr 都设为解析失败），WebGPU 和 WASM 各 2 张：抠图 0.1 s 内跳过，分类模型从 closet-models 下载（q4f16 / int8），2 张都是"休闲短袖"，和之前一致；没有发往 jsDelivr 的请求。
+  - check.html（Mac Chrome）8 项全部成功。
+
 ## 最近一次工作（2026-10-12，国内模型下载）
 - 用户反馈：A 在 iPhone 通过。国内朋友 Safari 27 报"加载抠图模型失败：Load failed"。iOS 17 也不行，用户决定放弃 Safari 26 以下的设备。
 - 已确认：错误原文就是 "Load failed"，即 Safari 的 `fetch` 网络错误，没有被 ONNX Runtime 包装，所以是下载模型文件的请求失败，不是 vendor 文件。哪个请求失败（huggingface.co 本身，还是大文件 CDN `us.aws.cdn.hf.co`）未确认。

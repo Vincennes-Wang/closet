@@ -1,9 +1,9 @@
 // 唯一访问 IndexedDB 的模块。其他代码只调用 openStore() 返回的方法。
 import { SEASONS, SCENES } from './options.js';
-import { CATEGORIES, isValidPair } from './taxonomy.js';
+import { CATEGORIES, categoryError } from './taxonomy.js';
 
 const DB_NAME = 'closet';
-const DB_VERSION = 3;
+export const DB_VERSION = 3;
 const STORE = 'items';
 const QUEUE = 'queue'; // 选进来、还没确认录入的照片（抠图、分类都在这里做）
 const META = 'meta'; // 键值：job = 处理任务状态，device = 本设备设置
@@ -17,10 +17,12 @@ export const CLASSIFY_STATUS = ['pending', 'processing', 'done', 'failed', 'skip
 // 可编辑字段；id、createdAt、image、hasAlpha 录入时确定，之后不经 update 修改
 const EDITABLE = ['name', 'categoryId', 'subcategoryId', 'seasons', 'scenes', 'color', 'archived'];
 
-// 衣物只存分类 id，不存中文名（显示名从 taxonomy.js 和分类表取）
-export function validate(item) {
+// 衣物只存分类 id，不存中文名（显示名从 taxonomy.js 和分类表取）。
+// categoryRows：分类表记录，用来放行自建分类（导入备份时传备份里的分类表）；不传时只认内置分类
+export function validate(item, categoryRows = []) {
   const errors = [];
-  if (!isValidPair(item.categoryId, item.subcategoryId)) errors.push(`分类无效：${item.categoryId} / ${item.subcategoryId}`);
+  const ce = categoryError(item, categoryRows);
+  if (ce) errors.push(ce);
   for (const [key, allowed] of [['seasons', SEASONS], ['scenes', SCENES]]) {
     if (!Array.isArray(item[key])) errors.push(`${key} 必须是数组`);
     else for (const v of item[key]) if (!allowed.includes(v)) errors.push(`${key} 含无效值：${v}`);
@@ -216,6 +218,33 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
       if (used) throw new Error('这个分类下还有衣物，先把衣物移到别的分类');
       await tx('readwrite', (os) => req(os.delete(id)), CATS);
     },
+
+    // ---------- 备份（backup.js） ----------
+    dbVersion: DB_VERSION,
+    // 全部衣物（含已归档）和分类表
+    async exportData() {
+      return { items: await tx('readonly', (os) => req(os.getAll())), categories: await tx('readonly', (os) => req(os.getAll()), CATS) };
+    },
+    // 导入（合并）：id 已存在的衣物和分类记录跳过（不覆盖本机的修改），其余新增。
+    // 一个事务：任何一步失败整个事务中止，数据库不变。图片 Blob 由调用方事先复制好（backup.js parseBackup）
+    async importData({ items, categories }) {
+      const t = db.transaction([STORE, CATS], 'readwrite');
+      const done = new Promise((ok, fail) => { t.oncomplete = ok; t.onerror = () => fail(t.error); t.onabort = () => fail(t.error ?? new Error('导入已中止')); });
+      const its = t.objectStore(STORE), cats = t.objectStore(CATS);
+      let added = 0, skipped = 0;
+      try {
+        for (const item of items) {
+          if (await req(its.getKey(item.id)) !== undefined) { skipped++; continue; }
+          its.add(item); added++;
+        }
+        for (const row of categories) if (await req(cats.getKey(row.id)) === undefined) cats.add(row);
+      } catch (err) { try { t.abort(); } catch { /* 已中止 */ } throw err; }
+      await done;
+      return { added, skipped };
+    },
+    // 上次备份时间（毫秒），本机记录，不导出
+    getBackupAt: async () => (await tx('readonly', (os) => req(os.get('backup')), META))?.at ?? null,
+    setBackupAt: (at) => tx('readwrite', (os) => req(os.put({ at }, 'backup')), META),
     close: () => db.close(),
   };
 }

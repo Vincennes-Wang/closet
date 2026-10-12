@@ -3,6 +3,7 @@ import { CATEGORIES, getNode, split, seasonsFor, labelOf } from './taxonomy.js';
 import { openStore, groupByCategory } from './store.js';
 import { prepareImage, probeWebpAlpha, makeThumb } from './image.js';
 import { THUMB_SIDE, RESULTS_DELAY_MS } from './config.js';
+import { buildBackup, parseBackup } from './backup.js';
 import {
   startJob, pauseJob, continueJob, cancelJob, summarize, resumeQueue, eventLines, noteResultsLoad, noteWait, noteResultsShown,
   guessBackend, estimateMs, remainingMs, minutesText,
@@ -125,6 +126,7 @@ async function render() {
   urls.clear();
   const all = await store.list({ includeArchived: true });
   showStorage(all);
+  showBackupAge(all.length);
   const active = all.filter((i) => !i.archived);
   renderGroups($('closet'), active);
   $('empty').hidden = active.length > 0;
@@ -348,6 +350,67 @@ async function showStorage(items) {
     ? `数据不会被自动清除 · 照片占用 ${mb} MB`
     : `空间不足时浏览器可能清除数据，请定期备份 · 照片占用 ${mb} MB`;
 }
+
+// ---------- 备份 ----------
+// 页头：上次备份时间。超过 7 天、或有衣物却从未备份时用提醒色
+async function showBackupAge(itemCount) {
+  const at = await store.getBackupAt();
+  const days = at === null ? null : Math.floor((Date.now() - at) / 86400000);
+  const box = $('backupAge');
+  box.textContent = days === null ? '还没有备份' : `上次备份：${days === 0 ? '今天' : `${days} 天前`}`;
+  box.classList.toggle('warn', days === null ? itemCount > 0 : days > 7);
+}
+
+const backupMsg = (text, ...extra) => $('backupMsg').replaceChildren(text, ...extra);
+
+// 存好文件后记录备份时间
+async function exported(count, file) {
+  await store.setBackupAt(Date.now());
+  backupMsg(`已导出 ${count} 件（${file.name}，${(file.size / 1024 / 1024).toFixed(1)} MB）`);
+  render();
+}
+
+// 手机用分享菜单（iPhone 可"存储到文件"），其他用下载。
+// 生成 ZIP 要一些时间，iPhone 可能认为已经不是用户点击触发的分享（NotAllowedError），这时让用户再点一次
+async function saveBackup(file, count) {
+  const share = matchMedia('(pointer: coarse)').matches && navigator.canShare?.({ files: [file] });
+  if (!share) {
+    const a = el('a', { href: URL.createObjectURL(file), download: file.name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    return exported(count, file);
+  }
+  try {
+    await navigator.share({ files: [file] });
+    return exported(count, file);
+  } catch (err) {
+    if (err.name === 'AbortError') return backupMsg('已取消，没有保存备份');
+    if (err.name !== 'NotAllowedError') throw err;
+    backupMsg('备份已生成。', el('button', { type: 'button', className: 'primary', textContent: '保存备份文件',
+      onclick: () => saveBackup(file, count).catch((e) => backupMsg(`导出失败：${e.message}`)) }));
+  }
+}
+
+$('exportBtn').addEventListener('click', async () => {
+  backupMsg('正在生成备份…');
+  try {
+    const appVersion = (await globalThis.caches?.keys().catch(() => []) ?? []).find((k) => /^closet-v\d+$/.test(k)) ?? '';
+    const { blob, filename, count } = await buildBackup(store, { appVersion });
+    await saveBackup(new File([blob], filename, { type: 'application/zip' }), count);
+  } catch (err) { backupMsg(`导出失败：${err.message}`); }
+});
+
+// 先完整校验（版本、分类、每张图片），再一个事务写入；任何一步失败数据库不变
+$('importInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  backupMsg('正在导入…');
+  try {
+    const { added, skipped } = await store.importData(await parseBackup(file));
+    backupMsg(`新增 ${added} 件，跳过 ${skipped} 件`);
+    render();
+  } catch (err) { backupMsg(`导入失败：${err.message}`); } finally { e.target.value = ''; }
+});
 
 // 测试辅助，交付前视情况删除
 async function showDiag() {

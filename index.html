@@ -17,6 +17,7 @@
 <header>
   <h1><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16.0 7.5L16.0 1.0M19.3 8.1L20.8 4.5M22.0 10.0L26.6 5.4M23.9 12.7L27.5 11.2M24.5 16.0L31.0 16.0M23.9 19.3L27.5 20.8M22.0 22.0L26.6 26.6M19.3 23.9L20.8 27.5M16.0 24.5L16.0 31.0M12.7 23.9L11.2 27.5M10.0 22.0L5.4 26.6M8.1 19.3L4.5 20.8M7.5 16.0L1.0 16.0M8.1 12.7L4.5 11.2M10.0 10.0L5.4 5.4M12.7 8.1L11.2 4.5" stroke="#f6b40e" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="16" r="6.5" fill="#f6b40e" stroke="#85340a" stroke-width="1"/></svg>衣橱</h1>
   <p id="storage" class="muted">检查存储中…</p>
+  <p id="backupAge" class="muted"></p>
 </header>
 
 <main>
@@ -33,6 +34,16 @@
 
   <label class="toggle"><input type="checkbox" id="showArchived"> 显示已归档</label>
   <section id="archived" aria-label="已归档" hidden></section>
+
+  <section id="backup" class="card" aria-label="备份">
+    <h2>备份</h2>
+    <p class="muted">导出一个 ZIP 文件，包含全部衣物和照片。换手机或清空数据后，用"导入备份"恢复；已有的衣物会跳过。</p>
+    <div class="actions">
+      <button type="button" id="exportBtn" class="primary">导出备份</button>
+      <label class="filebtn">导入备份<input id="importInput" type="file" accept=".zip,application/zip" hidden></label>
+    </div>
+    <p id="backupMsg" class="muted" role="status"></p>
+  </section>
 
   <details id="about">
     <summary>关于</summary>
