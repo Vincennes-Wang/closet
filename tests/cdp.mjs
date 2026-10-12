@@ -9,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 const ROOT = resolve(import.meta.dirname, '..');
 const CHROME = process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
-  '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
+  '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.wasm': 'application/wasm' };
 
 export async function startServer() {
   const server = createServer(async (req, res) => {

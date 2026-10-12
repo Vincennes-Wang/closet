@@ -49,7 +49,7 @@
 ## 项目决策（穿搭 PWA）
 - 用途：给家人用的衣橱 + 搭配网页。
 - 当前定位：个人和家人朋友免费使用，非商用。
-- 平台：PWA，托管在 GitHub Pages。无构建步骤，无后端。第三方库只用 CDN 引入，并固定版本号。
+- 平台：PWA，托管在 GitHub Pages。无构建步骤，无后端。第三方库放在 `vendor/`（本站加载，不用 CDN：jsDelivr 在中国打不开，2026-10-12 用户实测），固定版本号，来源 URL、许可证和 sha256 见 `vendor/README.md`，LICENSE 文件一起放进去。模型仍从 huggingface.co 下载（中国能打开），地址在 `config.js` `MODEL_HOST`，打不开时可换镜像。
 - 个人数据（衣物照片、搭配）只存在用户浏览器的 IndexedDB 中，绝不进仓库。
 - 应用内抠图：RMBG-1.4（`briaai/RMBG-1.4`，Bria 非商用许可，允许个人非商用使用）。模型 ID 只在 `config.js` 的 `MATTING_MODEL.id` 定义，换模型只改这一处。
 - 抠图是可选功能（2026-10-11 决策）：抠图失败或用户选"用原图"时，原图照常录入，应用完整可用。阶段 2a 在录入时批量抠图（队列），见下方"阶段计划"。仍接收透明 PNG（例如别处抠好的图）。
@@ -122,7 +122,7 @@
 ## 已核实的模型（2026-10-10，查 Hugging Face API）
 | 用途 | 仓库 | 许可证 | 备注 |
 |---|---|---|---|
-| 运行库 | `@huggingface/transformers@4.3.1`（jsDelivr `dist/transformers.min.js`） | Apache-2.0 | 浏览器缓存默认开启（Cache API `transformers-cache`）。不要用 `transformers.web.min.js`：它含裸模块名 `onnxruntime-web/webgpu`，浏览器无法解析 |
+| 运行库 | `@huggingface/transformers@4.3.1`（`vendor/transformers-4.3.1/transformers.min.js`）+ 内置版本的 `onnxruntime-web` wasm | Apache-2.0 / MIT | 浏览器缓存默认开启（Cache API `transformers-cache`）。不要用 `transformers.web.min.js`：它含裸模块名 `onnxruntime-web/webgpu`，浏览器无法解析 |
 | 抠图（已放弃） | `onnx-community/BiRefNet_lite-ONNX` | MIT | fp16 114.5 MB / fp32 224 MB。模型卡示例里的 `onnx-community/BiRefNet_lite` 不存在。**Mac Chrome 上跑不通**：WebGPU 超出 storage buffer 上限（需 11，上限 10），WASM 内存不足；输入固定 1024² |
 | 抠图（对照） | `Xenova/modnet` | Apache-2.0 | fp16 13 MB / uint8 6.6 MB。人像抠图模型，衣物平铺图大量破洞，不可用 |
 | 抠图（应用内） | `briaai/RMBG-1.4` | Bria 非商用（模型卡："source-available model for non-commercial use"，Creative Commons 非商用；商用需与 Bria 签协议。卡片上的许可页链接 2026-10-10 返回 404） | fp16 88 MB / quantized 44 MB。Mac Chrome 效果最好，WebGPU 222 ms/张；iPhone（Safari 27）WebGPU fp16 可用，首张 1.6 s。小米手机（Chrome/Opera）WebGPU fp16、fp32 输出无效遮罩（结果全透明），WASM 正常，约 18 s/张；三星 Chrome、华为鸿蒙浏览器正常（2026-10-12） |
@@ -131,6 +131,8 @@
 
 ## 目录
 - 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`sw.js`、`manifest.webmanifest`、`icons/`）。
+- `vendor/`：第三方库（transformers.js、ONNX Runtime），见 `vendor/README.md`。
+- `docs/HISTORY.md`：PROGRESS.md 移出的旧记录。
 - `tests/`：`node --test tests/*.test.mjs`。`store.test.mjs` 测纯函数；`browser.test.mjs` 用 headless Chrome（CDP，`tests/cdp.mjs`，无依赖）测真实 IndexedDB、录入流程、抠图队列（假模型）和离线打开。模拟崩溃用"处理中直接重新打开页面"，不用 CDP `Page.crash`（装了 Service Worker 后崩溃后的导航不返回）。需要本机装有 Chrome。
 - `tools/`：Mac 上运行的脚本。`embed.mjs` 生成标签向量；`eval.mjs` 用 `private/samples` + `private/labels.json` 算分类准确率。都用 headless Chrome（`tests/cdp.mjs`），不加依赖。
 - `spike/`：阶段 0 验证页（`index.html` 单文件）和预计算的标签向量 `label-embeddings.json`。

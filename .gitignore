@@ -30,3 +30,6 @@ private/
 # 例外：应用图标
 !icons/
 !icons/**
+
+# 备份文件
+*.zip

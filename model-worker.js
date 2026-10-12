@@ -2,8 +2,8 @@
 // 一个 Worker 只做一种任务（task）：matting = 抠图（RMBG），classify = 分类（fashionSigLIP 图像模型）。
 // 消息：init（加载模型）/ run（处理一张，ImageBitmap 以 transfer 方式传入）/ dispose（释放 ONNX session）
 // 测试用：init 时 fake 为数字，则不加载模型，每张等待 fake 毫秒后返回假结果；fakeEmptyMask 为 true 时，非 WASM 后端输出全空遮罩
-import { pickBackend, EMPTY_MASK_RATIO, EMPTY_MASK_ERROR } from './config.js';
-const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js';
+import { pickBackend, EMPTY_MASK_RATIO, EMPTY_MASK_ERROR, VENDOR, MODEL_HOST } from './config.js';
+const LOCAL = new URL(VENDOR, import.meta.url).href;
 let task = null, model = null, processor = null, spec = null, RawImage = null, fake = null, labels = null;
 let device = null, fakeEmptyMask = false;
 
@@ -12,8 +12,13 @@ let device = null, fakeEmptyMask = false;
 async function init({ task: initTask = 'matting', modelId, dtype, wasmDtype, input, output, config, labels: l, fake: f, noWebgpu = false, fakeEmptyMask: fe = false }) {
   task = initTask; spec = { input, output }; labels = l ?? null;
   if (typeof f === 'number') { fake = f; fakeEmptyMask = fe; device = noWebgpu ? 'wasm' : 'fake'; return { device, dtype: 'fake', loadMs: 0 }; }
-  const t = await import(TRANSFORMERS);
+  const t = await import(`${LOCAL}transformers.min.js`);
   t.env.allowLocalModels = false;
+  t.env.remoteHost = MODEL_HOST;
+  // transformers.js 导入时按浏览器选好 ONNX Runtime 文件（一般是 .asyncify 版，Safari 26 以下且没有 WebGPU 时是普通版），
+  // 地址指向 jsDelivr。保留它选的文件名，改从本站下载
+  const wasm = t.env.backends.onnx.wasm;
+  wasm.wasmPaths = Object.fromEntries(Object.entries(wasm.wasmPaths).map(([k, u]) => [k, LOCAL + String(u).split('/').pop()]));
   RawImage = t.RawImage;
   // Worker 里没有 WebGPU、或显卡不支持 fp16 时回退 WASM（见 config.js pickBackend），并把实际后端报告给主线程
   const gpu = { webgpu: false, shaderF16: false };

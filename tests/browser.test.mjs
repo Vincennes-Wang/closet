@@ -173,6 +173,10 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
   await chrome.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
   await chrome.reload();
   await chrome.waitFor(`document.querySelectorAll('#closet .tile').length === 1`);
+  // 本站的 transformers.js 和 ONNX Runtime 也在离线缓存里（国内打不开 jsDelivr）
+  const vendor = await chrome.evaluate(`Promise.all(['transformers.min.js', 'ort-wasm-simd-threaded.asyncify.mjs', 'ort-wasm-simd-threaded.asyncify.wasm']
+    .map((f) => fetch('vendor/transformers-4.3.1/' + f).then(async (r) => r.ok && (await r.arrayBuffer()).byteLength)))`);
+  assert.deepEqual(vendor, [586230, 53057, 26861777]);
   await chrome.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
 });
 

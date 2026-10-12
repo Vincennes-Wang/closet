@@ -1,9 +1,14 @@
 // 离线缓存应用文件。改了下面任一文件后，把版本号加 1，用户下次打开时更新。
-const CACHE = 'closet-v17';
+const CACHE = 'closet-v18';
 const FILES = [
   './', 'index.html', 'app.js', 'store.js', 'image.js', 'options.js', 'style.css',
   'config.js', 'queue.js', 'model-worker.js', 'taxonomy.js', 'label-embeddings.json',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
+  // 本站的 transformers.js 和 ONNX Runtime（见 config.js VENDOR）。不带 .asyncify 的那套只有 Safari 26 以下
+  // 且没有 WebGPU 时才用（14 MB），不预缓存，用到时从网络下载
+  'vendor/transformers-4.3.1/transformers.min.js',
+  'vendor/transformers-4.3.1/ort-wasm-simd-threaded.asyncify.mjs',
+  'vendor/transformers-4.3.1/ort-wasm-simd-threaded.asyncify.wasm',
 ];
 
 self.addEventListener('install', (e) => {
