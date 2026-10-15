@@ -1,7 +1,7 @@
 # PROGRESS
-- 状态：暂停（等 Claude.ai 重新规划阶段 4–6 的范围）
-- 当前阶段：3 备份已验收；4 衣橱筛选 + 搭配，范围待定
-- 累计用时：约 28（预算 10–30）
+- 状态：进行中
+- 当前阶段：4a 衣橱新布局（计划中）
+- 累计用时：约 15（用户报）（工作 21 次）
 - 线上地址：https://vincennes-wang.github.io/closet/（应用）、https://vincennes-wang.github.io/closet/check.html（网络检查）、https://vincennes-wang.github.io/closet-models/（模型）
 
 ## 最近一次工作（2026-10-12，阶段 3 验收 + 阶段 4 开始前的决定）
@@ -21,7 +21,6 @@
 3. 以后再议：国内怎样抠图。
 
 ## 未解决问题
-- 项目时间：已用约 28 / 30 小时，阶段 4–6 需要砍范围。
 - Mac Safari 自动化：harness 页面不执行脚本，原因未确认。下次要用时先手动在 Safari 打开 `http://127.0.0.1:<端口>/` 看页面是否正常（可能是旧 Service Worker 或 Safari 设置）。
 - 360 浏览器 "does not support fp16"：已修（改用 WASM），未真机验证。
 - 慢速提示的经验值（`ESTIMATE_MS`）只来自两台设备；国内跳过抠图时开始前的估算偏高。
