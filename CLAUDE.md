@@ -148,7 +148,7 @@
 - 搭配记录 `{ id, createdAt, updatedAt, name, scenes, slots }`，槽位存衣物 id。季节不存，`outfitSeasons()` = 在场衣物季节的交集（已删除、已归档不参与）。
 - 衣物删除或归档后，搭配保留 id，卡片和编辑里显示"已删除"/"已归档"；保存时 `outfitError` 要求重新选择。归档、彻底删除前，衣物在搭配里时先提示"这件衣服在 N 套搭配里"。
 - 页面切换"衣橱 | 搭配"存在 hash（`v=outfits`），和衣橱筛选参数合并（`app.js` `writeHash`）。搭配编辑在 `#editDialog` 里，点槽位后同一个弹窗换成选择器（`createPicker` `mode: 'single'`），不叠两层弹窗。
-- 缩略图：网格、搭配卡片、槽位都用 `thumbs.js` `createImageLoader`（IntersectionObserver，提前 300 px；离开视口释放 object URL）。缩略图长边 `THUMB_SIDE`，存 `thumbs` 表，没有就用原图生成；删除衣物时同一事务删缩略图。编辑弹窗大图仍用原图。4a 网格用原图：40 件 1024 图解码约 160 MB，改后 2.5–4.5 MB（`node tools/memory.mjs <旧版目录>`）。
+- 缩略图：网格、搭配卡片、槽位都用 `thumbs.js` `createImageLoader`（IntersectionObserver，提前 300 px；离开视口释放 object URL）。缩略图长边 `THUMB_SIDE`，存 `thumbs` 表，没有就用原图生成；删除衣物时同一事务删缩略图。编辑弹窗大图仍用原图。4a 网格用原图：40 件 1024 图解码约 160 MB，改后 2.5–4.5 MB（`node tools/memory.mjs <旧版目录>`）。Mac Safari 标签页内存（活动监视器，40 件 + 20 套）：衣橱 97.2 MB，搭配页 97.5 MB（2026-10-15 用户实测）。
 - 测试数据页 `tests/seed.html?items=40&outfits=20`：只在本机测试服务器上用，会清空该网址的数据库。
 
 ### 配色（2026-10-11）
