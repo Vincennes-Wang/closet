@@ -21,6 +21,12 @@
 </header>
 
 <main>
+  <div id="fatal" class="card hint" role="alert" hidden></div>
+  <nav id="views" class="views" aria-label="页面">
+    <button type="button" data-v="closet" aria-pressed="true">衣橱</button>
+    <button type="button" data-v="outfits" aria-pressed="false">搭配</button>
+  </nav>
+
   <label class="primary" id="addLabel">
     ＋ 录入衣物
     <input id="fileInput" type="file" accept="image/*" multiple hidden>
@@ -34,6 +40,12 @@
 
   <button type="button" id="archivedBtn" class="archived-btn" aria-expanded="false" hidden></button>
   <section id="archived" aria-label="已归档" hidden></section>
+
+  <section id="outfits" aria-label="搭配">
+    <button type="button" id="newOutfit" class="primary wide">＋ 新建搭配</button>
+    <p id="outfitsEmpty" class="muted" hidden>还没有搭配。点"新建搭配"，从衣橱里给每个位置选一件。</p>
+    <div id="outfitList" class="outfit-list"></div>
+  </section>
 
   <section id="backup" class="card" aria-label="备份">
     <h2>备份</h2>
@@ -51,6 +63,7 @@
     <p>应用内抠图使用 <a href="https://huggingface.co/briaai/RMBG-1.4">RMBG-1.4</a>（Bria，非商用许可，仅限个人非商用使用）。模型首次使用时从网络下载（约 88 MB），之后从浏览器缓存读取。</p>
     <p>模型运行库：<a href="https://github.com/huggingface/transformers.js">Transformers.js</a>（Apache-2.0）和 <a href="https://github.com/microsoft/onnxruntime">ONNX Runtime Web</a>（MIT），文件放在本站。</p>
     <p>模型下载不了时，打开 <a href="check.html">网络检查</a>，截图发给开发者。</p>
+    <p id="version" class="muted"></p>
     <p id="diag" class="muted"></p>
   </details>
 </main>

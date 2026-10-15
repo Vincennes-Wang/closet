@@ -1,8 +1,11 @@
 // 备份：导出 / 导入一个 ZIP（只存储、不压缩，自己写，不加依赖）。格式见 CLAUDE.md"备份"。
-// ZIP 内：manifest.json（衣物记录、分类表，图片字段写成 ZIP 内文件名）+ images/<id>.<扩展名>（图片原始字节）
+// ZIP 内：manifest.json（衣物记录、分类表、搭配、计划，图片字段写成 ZIP 内文件名）+ images/<id>.<扩展名>（图片原始字节）
+// 版本：1 = 衣物 + 分类；2 = 再加搭配（outfits）和计划（plans）。导入两种都认
 import { validate } from './store.js';
+import { validateOutfit, validatePlan } from './outfit.js';
 
-export const FORMAT_VERSION = 1;
+export const FORMAT_VERSION = 2;
+const READABLE = [1, 2];
 const EXT = { 'image/webp': 'webp', 'image/png': 'png', 'image/jpeg': 'jpg' };
 const TYPE = Object.fromEntries(Object.entries(EXT).map(([t, e]) => [e, t]));
 // 衣物记录导出的字段（store.js newItem 的全部字段）。改了衣物字段要同时改这里，并把 FORMAT_VERSION 加 1
@@ -103,9 +106,9 @@ export async function readZip(blob) {
 const pad = (n) => String(n).padStart(2, '0');
 export const backupFilename = (d = new Date()) => `closet-backup-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.zip`;
 
-// 导出：全部衣物（含已归档）+ 分类表。不导出待确认照片（queue）和本设备设置（meta）
+// 导出：全部衣物（含已归档）+ 分类表 + 搭配 + 计划。不导出待确认照片（queue）、本设备设置（meta）和缩略图（thumbs）
 export async function buildBackup(store, { now = new Date(), appVersion = '' } = {}) {
-  const { items, categories } = await store.exportData();
+  const { items, categories, outfits, plans } = await store.exportData();
   items.sort((a, b) => a.createdAt - b.createdAt);
   const images = items.map((it) => ({ name: `images/${it.id}.${EXT[it.image.type] ?? 'bin'}`, blob: it.image }));
   const manifest = {
@@ -113,6 +116,9 @@ export async function buildBackup(store, { now = new Date(), appVersion = '' } =
     itemCount: items.length,
     items: items.map((it, i) => ({ ...Object.fromEntries(FIELDS.map((k) => [k, it[k]])), image: images[i].name })),
     categories,
+    outfitCount: outfits.length,
+    outfits,
+    plans,
   };
   const blob = await makeZip([{ name: 'manifest.json', blob: new Blob([JSON.stringify(manifest, null, 1)], { type: 'application/json' }) }, ...images], now);
   return { blob, filename: backupFilename(now), count: items.length };
@@ -126,7 +132,7 @@ export async function parseBackup(file) {
   if (!mf) throw new Error('备份里没有 manifest.json');
   let manifest;
   try { manifest = JSON.parse(await mf.text()); } catch { throw new Error('manifest.json 读不出来'); }
-  if (manifest.formatVersion !== FORMAT_VERSION) throw new Error(`不认识的备份版本：${manifest.formatVersion}`);
+  if (!READABLE.includes(manifest.formatVersion)) throw new Error(`不认识的备份版本：${manifest.formatVersion}`);
   const categories = manifest.categories;
   if (!Array.isArray(manifest.items) || !Array.isArray(categories)) throw new Error('manifest.json 缺少衣物或分类');
   if (manifest.itemCount !== manifest.items.length) throw new Error(`衣物数量不一致：${manifest.itemCount} / ${manifest.items.length}`);
@@ -142,5 +148,11 @@ export async function parseBackup(file) {
     try { validate(item, categories); } catch (err) { throw new Error(`${where}（${m.id}）：${err.message}`); }
     items.push(item);
   }
-  return { items, categories };
+  // v1 没有搭配和计划
+  const outfits = manifest.formatVersion >= 2 ? manifest.outfits : [];
+  const plans = manifest.formatVersion >= 2 ? manifest.plans : [];
+  if (!Array.isArray(outfits) || !Array.isArray(plans)) throw new Error('manifest.json 缺少搭配或计划');
+  if (manifest.formatVersion >= 2 && manifest.outfitCount !== outfits.length) throw new Error(`搭配数量不一致：${manifest.outfitCount} / ${outfits.length}`);
+  const check = (list, fn, what) => list.map((x, i) => { try { return fn(x); } catch (err) { throw new Error(`第 ${i + 1} 个${what}：${err.message}`); } });
+  return { items, categories, outfits: check(outfits, validateOutfit, '搭配'), plans: check(plans, validatePlan, '计划') };
 }

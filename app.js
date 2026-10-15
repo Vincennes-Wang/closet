@@ -1,7 +1,9 @@
 import { SEASONS, SCENES } from './options.js';
 import { CATEGORIES, getNode, split, seasonsFor, labelOf, visibleTaxonomy } from './taxonomy.js';
-import { createPicker, parseFilter, filterToHash } from './picker.js';
+import { createPicker, parseFilter, filterParams } from './picker.js';
 import { openStore, groupByCategory } from './store.js';
+import { SLOTS, getSlot, itemsForSlot, taxonomyForSlot, slotState, outfitError, outfitSeasons, outfitsUsing, emptySlots } from './outfit.js';
+import { createImageLoader } from './thumbs.js';
 import { prepareImage, probeWebpAlpha, makeThumb } from './image.js';
 import { THUMB_SIDE, RESULTS_DELAY_MS } from './config.js';
 import { buildBackup, parseBackup } from './backup.js';
@@ -17,8 +19,29 @@ const el = (tag, props = {}, ...children) => {
   return e;
 };
 
-const store = await openStore();
-const urls = new Set(); // 当前显示中的 object URL，重新渲染时统一释放
+// 打不开数据库时不留空白页：
+// - VersionError：数据库已被新版本升级，这个页面是旧版本 → 提示刷新，并让 Service Worker 检查更新
+// - BlockedError：别的标签页还开着旧版本，挡住了升级 → 提示关闭其他页面
+const fakeDbVersion = new URLSearchParams(location.search).get('fakeDbVersion'); // 测试用：模拟旧代码请求低版本
+async function openOrExplain() {
+  try {
+    return await openStore(globalThis.indexedDB, fakeDbVersion ? { version: Number(fakeDbVersion) } : undefined);
+  } catch (err) {
+    const text = err.name === 'VersionError' ? '有新版本，请刷新'
+      : err.name === 'BlockedError' ? err.message : `打不开数据：${err.message}`;
+    if (err.name === 'VersionError') navigator.serviceWorker?.getRegistration().then((r) => r?.update()).catch(() => {});
+    document.body.classList.add('fatal');
+    $('fatal').replaceChildren(el('p', { textContent: text }),
+      el('button', { type: 'button', className: 'primary', textContent: '刷新', onclick: () => location.reload() }));
+    $('fatal').hidden = false;
+    document.documentElement.dataset.ready = 'fatal';
+    return null;
+  }
+}
+const store = await openOrExplain();
+if (!store) await new Promise(() => {}); // 停在提示页，不执行后面的代码
+const urls = new Set(); // 当前显示中的 object URL（编辑弹窗大图），重新渲染时统一释放
+const images = createImageLoader(store); // 网格、搭配卡片：按需加载缩略图
 
 function objectUrl(blob) { const u = URL.createObjectURL(blob); urls.add(u); return u; }
 
@@ -109,10 +132,16 @@ $('fileInput').addEventListener('change', async (e) => {
 // ---------- 衣橱 ----------
 function tile(item) {
   const b = el('button', { type: 'button', className: 'tile' },
-    el('img', { src: objectUrl(item.image), alt: '', className: item.hasAlpha ? 'alpha' : '' }),
+    lazyImg(item),
     el('span', { textContent: item.name || labelOf(item.subcategoryId ?? item.categoryId) }));
   b.addEventListener('click', () => openEdit(item));
   return b;
+}
+
+function lazyImg(item) {
+  const img = el('img', { alt: '', className: item.hasAlpha ? 'alpha' : '' });
+  images.observe(img, item);
+  return img;
 }
 
 function renderGroups(container, items) {
@@ -122,7 +151,27 @@ function renderGroups(container, items) {
       el('div', { className: 'grid' }, ...g.items.map(tile)))));
 }
 
-// 衣橱用衣物选择器（picker.js）；筛选条件存在 URL hash，抠图队列自动刷新后仍在
+// ---------- 页面切换（衣橱 / 搭配）和 URL hash ----------
+// hash = 当前页面（v=outfits）+ 衣橱筛选（picker.js filterParams）。抠图队列自动刷新后仍在
+let view = new URLSearchParams(location.hash.slice(1)).get('v') === 'outfits' ? 'outfits' : 'closet';
+function writeHash() {
+  const p = picker ? filterParams(picker.getFilter()) : new URLSearchParams(location.hash.slice(1));
+  if (view === 'outfits') p.set('v', 'outfits'); else p.delete('v');
+  const h = p.toString();
+  history.replaceState(null, '', location.pathname + location.search + (h ? `#${h}` : ''));
+}
+function showView(v) {
+  view = v;
+  document.body.classList.toggle('view-outfits', v === 'outfits');
+  for (const b of document.querySelectorAll('#views button')) b.setAttribute('aria-pressed', String(b.dataset.v === v));
+  writeHash();
+  if (v === 'outfits') renderOutfits();
+  else $('outfitList').replaceChildren();
+  images.sweep();
+}
+for (const b of document.querySelectorAll('#views button')) b.addEventListener('click', () => showView(b.dataset.v));
+
+// 衣橱用衣物选择器（picker.js）
 let picker = null;
 let showArchived = false;
 async function render() {
@@ -135,8 +184,9 @@ async function render() {
   const active = all.filter((i) => !i.archived);
   picker ??= createPicker($('closet'), {
     filter: parseFilter(location.hash, taxonomy),
-    onFilterChange: (f) => history.replaceState(null, '', location.pathname + location.search + filterToHash(f)),
+    onFilterChange: writeHash,
     onSelect: openEdit,
+    images,
   });
   picker.setData(all, taxonomy);
   $('closet').hidden = !active.length;
@@ -149,6 +199,8 @@ async function render() {
   $('archived').hidden = !(showArchived && archived.length);
   if (!$('archived').hidden) renderGroups($('archived'), archived);
   else $('archived').replaceChildren();
+  images.sweep();
+  if (view === 'outfits') renderOutfits();
 }
 $('archivedBtn').addEventListener('click', () => { showArchived = !showArchived; render(); });
 
@@ -162,13 +214,17 @@ function openEdit(item) {
   } });
   const buttons = item.archived
     ? [act('恢复', () => store.unarchive(item.id), 'primary'),
-       act('彻底删除', () => confirm('彻底删除后无法恢复，确定吗？') ? store.remove(item.id) : false, 'danger')]
+       act('彻底删除', async () => confirm(await usedText(item.id, '删除后这些搭配里显示"已删除"，') + '彻底删除后无法恢复，确定吗？')
+         ? store.remove(item.id) : false, 'danger')]
     : [act('保存', () => {
         const v = fields.values();
         if (categoryError(v)) { msg.textContent = categoryError(v); return false; }
         return store.update(item.id, v);
       }, 'primary'),
-       act('归档', () => store.archive(item.id))];
+       act('归档', async () => {
+         const used = await usedText(item.id, '归档后这些搭配里显示"已归档"。');
+         return !used || confirm(`${used}确定吗？`) ? store.archive(item.id) : false;
+       })];
   $('editForm').replaceChildren(
     el('img', { src: objectUrl(item.image), alt: '', className: item.hasAlpha ? 'thumb alpha' : 'thumb' }),
     fields.node, msg,
@@ -176,6 +232,120 @@ function openEdit(item) {
   );
   dialog.showModal();
   dialog.focus(); // showModal 默认聚焦第一个按钮（"上衣"），iOS 会在它外面画焦点圈
+}
+
+// "这件衣服在 N 套搭配里，……"；不在搭配里返回 ''
+async function usedText(itemId, consequence) {
+  const n = outfitsUsing(itemId, await store.listOutfits()).length;
+  return n ? `这件衣服在 ${n} 套搭配里，${consequence}` : '';
+}
+
+// ---------- 搭配 ----------
+const STATE_TEXT = { deleted: '已删除', archived: '已归档' };
+const itemName = (item) => item.name || labelOf(item.subcategoryId ?? item.categoryId);
+
+// 一个槽位的小图：有衣物显示缩略图，已删除 / 已归档显示文字
+function slotThumb(id, byId) {
+  const state = slotState(id, byId);
+  if (state === 'ok') return lazyImg(byId.get(id));
+  return el('span', { className: `slot-missing ${state ?? 'empty'}`, textContent: STATE_TEXT[state] ?? '' });
+}
+
+async function renderOutfits() {
+  const [outfits, all] = await Promise.all([store.listOutfits(), store.list({ includeArchived: true })]);
+  const byId = new Map(all.map((i) => [i.id, i]));
+  const cards = outfits.map((o) => {
+    const filled = SLOTS.filter((s) => o.slots[s.id]);
+    const seasons = outfitSeasons(o, byId);
+    const card = el('button', { type: 'button', className: 'outfit-card', onclick: () => openOutfit(o) },
+      el('span', { className: 'outfit-name', textContent: o.name || '未命名搭配' }),
+      el('span', { className: 'muted', textContent: [o.scenes.join('、'), seasons.join('')].filter(Boolean).join(' · ') || ' ' }),
+      el('span', { className: 'outfit-slots' }, ...filled.map((s) => {
+        const cell = el('span', { className: 'outfit-slot', title: s.zh }, slotThumb(o.slots[s.id], byId));
+        cell.dataset.slot = s.id;
+        return cell;
+      })));
+    card.dataset.id = o.id;
+    return card;
+  });
+  $('outfitList').replaceChildren(...cards);
+  $('outfitsEmpty').hidden = outfits.length > 0;
+  images.sweep();
+}
+$('newOutfit').addEventListener('click', () => openOutfit(null));
+
+// 搭配编辑：名称、场景、7 个槽位。点槽位后在同一个弹窗里换成选择器（不叠两层弹窗）
+async function openOutfit(saved) {
+  const dialog = $('editDialog');
+  const [all, rows] = await Promise.all([store.list({ includeArchived: true }), store.listCategoryRows()]);
+  const byId = new Map(all.map((i) => [i.id, i]));
+  const taxonomy = visibleTaxonomy(rows);
+  const draft = saved ? { ...saved, slots: { ...saved.slots } } : { name: '', scenes: [], slots: emptySlots() };
+  const name = el('input', { type: 'text', value: draft.name, placeholder: '可不填，如 周一通勤' });
+  const scenes = chips('scenes', SCENES, draft.scenes, true);
+  const msg = el('p', { className: 'error' });
+  const close = () => { dialog.close(); images.sweep(); };
+
+  function editor() {
+    const slotRows = SLOTS.map((slot) => {
+      const id = draft.slots[slot.id];
+      const state = slotState(id, byId);
+      const hint = slot.id === 'onepiece' ? '可空；选了它，上衣和下装可空' : slot.optional ? '可空' : '';
+      const row = el('div', { className: 'slot-row' },
+        el('button', { type: 'button', className: 'slot-pick', onclick: () => pickFor(slot) },
+          el('span', { className: 'slot-img' }, slotThumb(id, byId)),
+          el('span', { className: 'slot-text' },
+            el('strong', { textContent: slot.zh }),
+            el('span', { className: state === 'ok' || !state ? 'muted' : 'error', textContent: state === 'ok' ? itemName(byId.get(id)) : STATE_TEXT[state] ?? (hint || '未选') }))),
+        id ? el('button', { type: 'button', className: 'small', textContent: '清空', onclick: () => { draft.slots[slot.id] = null; editor(); } }) : '');
+      row.dataset.slot = slot.id;
+      return row;
+    });
+    $('editForm').replaceChildren(
+      el('h2', { textContent: saved ? '编辑搭配' : '新建搭配' }),
+      el('label', { className: 'field' }, el('span', { textContent: '名称' }), name),
+      el('div', { className: 'field' }, el('span', { textContent: '场景' }), scenes),
+      el('div', { className: 'slots' }, ...slotRows),
+      msg,
+      el('div', { className: 'actions' },
+        el('button', { type: 'button', className: 'primary', textContent: '保存', onclick: save }),
+        saved ? el('button', { type: 'button', className: 'danger', textContent: '删除搭配', onclick: remove }) : '',
+        el('button', { type: 'button', textContent: '取消', onclick: close })));
+    images.sweep();
+  }
+
+  function pickFor(slot) {
+    draft.name = name.value; draft.scenes = picked(scenes);
+    const tax = taxonomyForSlot(slot, taxonomy);
+    const choices = itemsForSlot(slot, all);
+    const box = el('div');
+    $('editForm').replaceChildren(
+      el('div', { className: 'pick-head' },
+        el('button', { type: 'button', className: 'small', textContent: '← 返回', onclick: () => { slotPicker.destroy(); editor(); } }),
+        el('h2', { textContent: `选择${slot.zh}` })),
+      choices.length ? box : el('p', { className: 'muted', textContent: '衣橱里还没有能放进这个槽位的衣物' }));
+    const slotPicker = createPicker(box, {
+      initialCategory: tax.length === 1 ? tax[0].id : null, canSwitchCategory: tax.length > 1, mode: 'single',
+      selectedId: draft.slots[slot.id], images,
+      onSelect: (item) => { draft.slots[slot.id] = item.id; slotPicker.destroy(); editor(); },
+    });
+    slotPicker.setData(choices, tax);
+  }
+
+  async function save() {
+    draft.name = name.value.trim(); draft.scenes = picked(scenes);
+    const err = outfitError(draft, byId);
+    if (err) { msg.textContent = err; return; }
+    try { await store.putOutfit(draft); close(); renderOutfits(); } catch (e) { msg.textContent = e.message; }
+  }
+  async function remove() {
+    if (!confirm('删除这套搭配吗？衣物不受影响。')) return;
+    await store.removeOutfit(saved.id); close(); renderOutfits();
+  }
+
+  editor();
+  dialog.showModal();
+  dialog.focus();
 }
 
 // ---------- 抠图队列 ----------
@@ -421,14 +591,16 @@ $('importInput').addEventListener('change', async (e) => {
   if (!file) return;
   backupMsg('正在导入…');
   try {
-    const { added, skipped } = await store.importData(await parseBackup(file));
-    backupMsg(`新增 ${added} 件，跳过 ${skipped} 件`);
+    const { added, skipped, outfitsAdded } = await store.importData(await parseBackup(file));
+    backupMsg(`新增 ${added} 件，跳过 ${skipped} 件；搭配新增 ${outfitsAdded} 套`);
     render();
   } catch (err) { backupMsg(`导入失败：${err.message}`); } finally { e.target.value = ''; }
 });
 
 // 测试辅助，交付前视情况删除
 async function showDiag() {
+  const version = (await globalThis.caches?.keys().catch(() => []) ?? []).find((k) => /^closet-v\d+$/.test(k));
+  $('version').textContent = `版本 ${version ?? '未知（还没有离线缓存）'}`;
   const w = await probeWebpAlpha();
   $('diag').textContent = w.ok ? '透明图保存为 WebP' : '透明图保存为 PNG（这台设备的浏览器不能保存带透明的 WebP）';
 }
@@ -443,7 +615,7 @@ if (job && !job.running && await noteResultsLoad(store)) {
   await noteWait(store, RESULTS_DELAY_MS);
   $('queueMsg').textContent = '';
 }
-if (!job?.running) await render();
+if (!job?.running) { await render(); showView(view); }
 else $('storage').textContent = '正在抠图';
 await renderQueue();
 if (!job?.running) {

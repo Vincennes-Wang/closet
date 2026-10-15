@@ -1,0 +1,31 @@
+<!doctype html><meta charset="utf-8"><title>测试数据</title>
+<!-- 只在本机测试服务器上用（node tools/memory.mjs）：清空本网址下的衣橱数据库，放入 N 件 1024×1024 的假衣物和 M 套搭配。
+     地址：/tests/seed.html?items=40&outfits=20。不要在正式网址打开（会清空数据）。 -->
+<p id="msg">正在准备…</p>
+<script type="module">
+const q = new URLSearchParams(location.search);
+const N = Number(q.get('items') ?? 40), M = Number(q.get('outfits') ?? 20);
+if (!/^(127\.0\.0\.1|localhost)$/.test(location.hostname)) throw new Error('只能在本机测试服务器上用');
+await new Promise((ok) => { const d = indexedDB.deleteDatabase('closet'); d.onsuccess = d.onerror = ok; });
+const { openStore } = await import('/store.js');
+const s = await openStore();
+const cats = [['top', 'top.shirt'], ['bottom', 'bottom.jeans'], ['shoes', 'shoes.sneakers'], ['outer', 'outer.jacket'], ['bag', null]];
+const ids = Object.fromEntries(cats.map(([c]) => [c, []]));
+for (let i = 0; i < N; i++) {
+  const [categoryId, subcategoryId] = cats[i % cats.length];
+  const c = new OffscreenCanvas(1024, 1024); const x = c.getContext('2d');
+  const g = x.createLinearGradient(0, 0, 1024, 1024); g.addColorStop(0, `hsl(${i * 37} 60% 45%)`); g.addColorStop(1, `hsl(${i * 37 + 90} 60% 65%)`);
+  x.fillStyle = g; x.beginPath(); x.roundRect(160, 120, 704, 784, 60); x.fill();
+  const item = await s.add({ image: await c.convertToBlob({ type: 'image/png' }), hasAlpha: true, categoryId, subcategoryId, seasons: ['春', '秋'], scenes: [], name: `衣物 ${i + 1}` });
+  ids[categoryId].push(item.id);
+  document.getElementById('msg').textContent = `衣物 ${i + 1} / ${N}`;
+}
+const at = (list, k) => list[k % list.length] ?? null;
+// 旧版本（没有搭配表）只放衣物
+for (let k = 0; s.putOutfit && k < M; k++) {
+  await s.putOutfit({ name: `搭配 ${k + 1}`, scenes: [], slots: { top: at(ids.top, k), bottom: at(ids.bottom, k), shoes: at(ids.shoes, k), outer: at(ids.outer, k), bag: at(ids.bag, k) } });
+}
+s.close();
+document.getElementById('msg').textContent = `完成：${N} 件衣物，${s.putOutfit ? M : 0} 套搭配`;
+document.documentElement.dataset.done = '1';
+</script>

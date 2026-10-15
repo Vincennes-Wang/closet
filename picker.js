@@ -44,14 +44,16 @@ export function parseFilter(hash, taxonomy) {
   return { categoryId: cat?.id ?? null, subcategoryId: sub?.id ?? null, seasons: list('season', SEASONS), scenes: list('scene', SCENES) };
 }
 
-export function filterToHash(f) {
+export const filterToHash = (f) => { const s = filterParams(f).toString(); return s ? `#${s}` : ''; };
+
+// 筛选条件 → URL 参数（app.js 还会加上别的参数，例如当前页面 v）
+export function filterParams(f) {
   const p = new URLSearchParams();
   if (f.categoryId) p.set('c', f.categoryId);
   if (f.subcategoryId) p.set('sub', f.subcategoryId);
   if (f.seasons.length) p.set('season', f.seasons.join(','));
   if (f.scenes.length) p.set('scene', f.scenes.join(','));
-  const s = p.toString();
-  return s ? `#${s}` : '';
+  return p;
 }
 
 // ---------- DOM ----------
@@ -76,10 +78,11 @@ const toggle = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [.
 //   canSwitchCategory：false 时不显示左边栏，一级分类固定
 //   mode：'browse'（点衣物 = 打开）或 'single'（点衣物 = 选中，高亮 selectedId）
 //   onFilterChange(filter)、onSelect(item)
+//   images：thumbs.js createImageLoader() 的结果（按需加载缩略图）；不传时直接显示原图（测试用）
 // 返回 { setData(items, taxonomy), getFilter(), destroy() }。taxonomy 是 visibleTaxonomy() 的结果
 export function createPicker(container, {
   filter = null, initialCategory = null, canSwitchCategory = true, mode = 'browse', selectedId = null,
-  onFilterChange = () => {}, onSelect = () => {},
+  onFilterChange = () => {}, onSelect = () => {}, images = null,
 } = {}) {
   let f = filter ? { ...filter } : { ...emptyFilter(), categoryId: initialCategory };
   let items = [], taxonomy = [];
@@ -133,9 +136,10 @@ export function createPicker(container, {
   }
 
   function tile(item) {
+    const img = el('img', { alt: '', className: item.hasAlpha ? 'alpha' : '' });
+    if (images) images.observe(img, item); else img.src = urlFor(item);
     const b = el('button', { type: 'button', className: 'tile', onclick: () => onSelect(item) },
-      el('img', { src: urlFor(item), alt: '', className: item.hasAlpha ? 'alpha' : '' }),
-      el('span', { textContent: nameOf(item) }));
+      img, el('span', { textContent: nameOf(item) }));
     b.dataset.id = item.id;
     if (mode === 'single') b.setAttribute('aria-pressed', String(item.id === selectedId));
     return b;
@@ -151,6 +155,7 @@ export function createPicker(container, {
       el('div', { className: 'picker-main' }, filters(shown.length),
         shown.length ? el('div', { className: 'grid picker-grid' }, ...shown.map(tile))
           : el('p', { className: 'muted', textContent: '没有符合条件的衣物' }))));
+    images?.sweep();
     for (const [name, top, left] of scrolled) {
       const e = name === 'side' ? container.querySelector('.picker-side') : container.querySelector(`.chips[data-name="${name}"]`);
       if (e) { e.scrollTop = top; e.scrollLeft = left; }
@@ -166,6 +171,6 @@ export function createPicker(container, {
     },
     getFilter: () => ({ ...f }),
     select(id) { selectedId = id; render(); },
-    destroy() { for (const c of urls.values()) URL.revokeObjectURL(c.url); urls.clear(); container.replaceChildren(); },
+    destroy() { for (const c of urls.values()) URL.revokeObjectURL(c.url); urls.clear(); container.replaceChildren(); images?.sweep(); },
   };
 }

@@ -1,13 +1,17 @@
 // 唯一访问 IndexedDB 的模块。其他代码只调用 openStore() 返回的方法。
 import { SEASONS, SCENES } from './options.js';
 import { CATEGORIES, categoryError } from './taxonomy.js';
+import { validateOutfit, validatePlan } from './outfit.js';
 
 const DB_NAME = 'closet';
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
 const STORE = 'items';
 const QUEUE = 'queue'; // 选进来、还没确认录入的照片（抠图、分类都在这里做）
 const META = 'meta'; // 键值：job = 处理任务状态，device = 本设备设置
-const CATS = 'categories'; // 用户自建分类，以及对内置分类的改名、隐藏（界面在阶段 4）
+const CATS = 'categories'; // 用户自建分类，以及对内置分类的改名、隐藏（界面在阶段 4c）
+const OUTFITS = 'outfits'; // 搭配（v4），规则见 outfit.js
+const PLANS = 'plans'; // 下周穿搭计划（v4，界面在阶段 5）
+const THUMBS = 'thumbs'; // 衣物缩略图（v4），{ itemId, blob }，不进备份，缺了就重新生成
 
 // 队列记录的抠图状态。processing 只在处理那一张时出现；页面加载时还看到它，说明上次处理到这张时页面崩溃了
 export const QUEUE_STATUS = ['pending', 'processing', 'cutout_done', 'cutout_failed', 'skipped'];
@@ -75,19 +79,42 @@ export function groupByCategory(items) {
 
 const req = (r) => new Promise((ok, fail) => { r.onsuccess = () => ok(r.result); r.onerror = () => fail(r.error); });
 
-export async function openStore(idbFactory = globalThis.indexedDB) {
-  const open = idbFactory.open(DB_NAME, DB_VERSION);
-  // v2、v3：用户确认旧的测试数据可以丢弃（2026-10-11 两次），直接删表重建，不写迁移。
-  // 以后再改结构必须写迁移（见 CLAUDE.md）
+// 打开时被别的标签页（旧版本还连着数据库）挡住升级。app.js 据此提示关闭其他页面
+export class BlockedError extends Error { constructor() { super('请关闭其他打开的衣橱页面后刷新'); this.name = 'BlockedError'; } }
+
+// version 只给测试用（模拟旧代码请求低版本时的 VersionError）
+export async function openStore(idbFactory = globalThis.indexedDB, { version = DB_VERSION } = {}) {
+  const open = idbFactory.open(DB_NAME, version);
+  // 每个分支只做"从上一版到这一版"的变化；新装（oldVersion 0）依次执行全部分支，每张表只建一次。
   open.onupgradeneeded = (e) => {
     const db = open.result;
-    if (e.oldVersion < 3) for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name);
-    db.createObjectStore(STORE, { keyPath: 'id' }).createIndex('categoryId', 'categoryId');
-    db.createObjectStore(QUEUE, { keyPath: 'id' }).createIndex('status', 'status');
-    db.createObjectStore(META);
-    db.createObjectStore(CATS, { keyPath: 'id' });
+    // v2、v3：用户确认旧的测试数据可以丢弃（2026-10-11 两次），直接删表重建，不写迁移
+    if (e.oldVersion < 3) {
+      for (const name of [...db.objectStoreNames]) db.deleteObjectStore(name);
+      db.createObjectStore(STORE, { keyPath: 'id' }).createIndex('categoryId', 'categoryId');
+      db.createObjectStore(QUEUE, { keyPath: 'id' }).createIndex('status', 'status');
+      db.createObjectStore(META);
+      db.createObjectStore(CATS, { keyPath: 'id' });
+    }
+    // v4：只新建表，v3 的数据原样保留
+    if (e.oldVersion < 4) {
+      db.createObjectStore(OUTFITS, { keyPath: 'id' });
+      db.createObjectStore(PLANS, { keyPath: 'id' }).createIndex('date', 'date');
+      db.createObjectStore(THUMBS, { keyPath: 'itemId' });
+    }
   };
-  const db = await req(open);
+  let blocked = false;
+  const db = await new Promise((ok, fail) => {
+    open.onsuccess = () => ok(open.result);
+    open.onerror = () => fail(open.error);
+    open.onblocked = () => { blocked = true; fail(new BlockedError()); };
+  }).catch((err) => {
+    // 被挡住后如果之后又打开成功，关掉这个连接，避免占着数据库
+    if (blocked) open.onsuccess = () => open.result.close();
+    throw err;
+  });
+  // 新版本要升级时，本页面让出连接（否则会挡住新版本）
+  db.onversionchange = () => db.close();
 
   // 每个操作一个事务；等事务 complete 才返回，确保已写入
   async function tx(mode, fn, name = STORE) {
@@ -144,7 +171,29 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
     },
     archive: (id) => update(id, { archived: true }),
     unarchive: (id) => update(id, { archived: false }),
-    remove: (id) => tx('readwrite', (os) => req(os.delete(id))),
+    // 删除衣物，同一个事务里删掉它的缩略图。搭配里保留它的 id（显示"已删除"）
+    async remove(id) {
+      const t = db.transaction([STORE, THUMBS], 'readwrite');
+      const done = new Promise((ok, fail) => { t.oncomplete = ok; t.onerror = () => fail(t.error); t.onabort = () => fail(t.error); });
+      t.objectStore(STORE).delete(id);
+      t.objectStore(THUMBS).delete(id);
+      await done;
+    },
+
+    // ---------- 缩略图（thumbs.js 用） ----------
+    getThumb: async (itemId) => (await tx('readonly', (os) => req(os.get(itemId)), THUMBS))?.blob ?? null,
+    putThumb: (itemId, blob) => tx('readwrite', (os) => req(os.put({ itemId, blob })), THUMBS),
+
+    // ---------- 搭配、计划 ----------
+    listOutfits: async () => (await tx('readonly', (os) => req(os.getAll()), OUTFITS)).sort((a, b) => b.updatedAt - a.updatedAt),
+    // 新建或保存搭配。只查结构；必填规则由界面用 outfitError 检查（已删除的衣物要允许留在旧搭配里）
+    async putOutfit(input, { now = Date.now() } = {}) {
+      const o = validateOutfit({ id: crypto.randomUUID(), createdAt: now, ...input, updatedAt: now });
+      await tx('readwrite', (os) => req(os.put(o)), OUTFITS);
+      return o;
+    },
+    removeOutfit: (id) => tx('readwrite', (os) => req(os.delete(id)), OUTFITS),
+    listPlans: () => tx('readonly', (os) => req(os.getAll()), PLANS),
 
     // ---------- 抠图队列 ----------
     // 透明图（别处已抠好）直接算抠图完成，不再进模型
@@ -221,26 +270,30 @@ export async function openStore(idbFactory = globalThis.indexedDB) {
 
     // ---------- 备份（backup.js） ----------
     dbVersion: DB_VERSION,
-    // 全部衣物（含已归档）和分类表
+    // 全部衣物（含已归档）、分类表、搭配、计划。不含缩略图
     async exportData() {
-      return { items: await tx('readonly', (os) => req(os.getAll())), categories: await tx('readonly', (os) => req(os.getAll()), CATS) };
+      const all = (name) => tx('readonly', (os) => req(os.getAll()), name);
+      return { items: await all(STORE), categories: await all(CATS), outfits: await all(OUTFITS), plans: await all(PLANS) };
     },
     // 导入（合并）：id 已存在的衣物和分类记录跳过（不覆盖本机的修改），其余新增。
     // 一个事务：任何一步失败整个事务中止，数据库不变。图片 Blob 由调用方事先复制好（backup.js parseBackup）
-    async importData({ items, categories }) {
-      const t = db.transaction([STORE, CATS], 'readwrite');
+    async importData({ items, categories, outfits = [], plans = [] }) {
+      const t = db.transaction([STORE, CATS, OUTFITS, PLANS], 'readwrite');
       const done = new Promise((ok, fail) => { t.oncomplete = ok; t.onerror = () => fail(t.error); t.onabort = () => fail(t.error ?? new Error('导入已中止')); });
       const its = t.objectStore(STORE), cats = t.objectStore(CATS);
-      let added = 0, skipped = 0;
+      let added = 0, skipped = 0, outfitsAdded = 0;
       try {
         for (const item of items) {
           if (await req(its.getKey(item.id)) !== undefined) { skipped++; continue; }
           its.add(item); added++;
         }
         for (const row of categories) if (await req(cats.getKey(row.id)) === undefined) cats.add(row);
+        const os = t.objectStore(OUTFITS), ps = t.objectStore(PLANS);
+        for (const o of outfits) if (await req(os.getKey(o.id)) === undefined) { os.add(o); outfitsAdded++; }
+        for (const p of plans) if (await req(ps.getKey(p.id)) === undefined) ps.add(p);
       } catch (err) { try { t.abort(); } catch { /* 已中止 */ } throw err; }
       await done;
-      return { added, skipped };
+      return { added, skipped, outfitsAdded };
     },
     // 上次备份时间（毫秒），本机记录，不导出
     getBackupAt: async () => (await tx('readonly', (os) => req(os.get('backup')), META))?.at ?? null,

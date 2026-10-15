@@ -8,7 +8,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); max-width: 1200px; margin-inline: auto; }
 /* 衣橱网格用满宽屏，其他区块保持 720 px 居中 */
-main > :not(#closet) { max-width: 720px; margin-inline: auto; }
+main > :not(#closet, #outfits) { max-width: 720px; margin-inline: auto; }
 
 /* 页头 = 简化的国旗：上下天蓝条，中间白底放太阳和标题，通栏 */
 header {
@@ -114,3 +114,38 @@ dialog::backdrop { background: rgb(21 48 77 / 40%); }
 .picker-count { display: flex; align-items: center; gap: 10px; margin: 0; min-height: 28px; }
 .picker-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 .picker-grid .tile[aria-pressed="true"] { border-color: var(--azul); box-shadow: 0 0 0 2px var(--azul); }
+
+/* 页面切换：衣橱 | 搭配 */
+.views { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--card); }
+.views button { border: none; border-radius: 0; padding: 10px; font-size: 16px; }
+.views button[aria-pressed="true"] { background: var(--celeste); font-weight: 600; }
+body:not(.view-outfits) #outfits { display: none; }
+body.view-outfits #addLabel, body.view-outfits #queueMsg, body.view-outfits #queue, body.view-outfits #closet,
+body.view-outfits #empty, body.view-outfits #archivedBtn, body.view-outfits #archived { display: none; }
+body.processing #views, body.processing #outfits { display: none; }
+/* 打不开数据库时只显示提示 */
+body.fatal main > :not(#fatal) { display: none; }
+#fatal p { margin: 0 0 8px; font-size: 16px; }
+
+/* 搭配列表 */
+.wide { display: block; width: 100%; padding: 12px; font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+.outfit-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.outfit-card { display: grid; gap: 6px; text-align: left; padding: 10px; border-radius: 14px; }
+.outfit-name { font-weight: 600; font-size: 16px; }
+.outfit-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 4px; }
+.outfit-slot img, .outfit-slot .slot-missing, .slot-img img, .slot-img .slot-missing { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 8px; display: grid; place-items: center; }
+.slot-missing { background: var(--bg); color: var(--danger); font-size: 12px; }
+.slot-missing.empty { color: var(--muted); }
+/* 搭配编辑：每个槽位一行 */
+.slots { display: grid; gap: 6px; margin: 10px 0; }
+.slot-row { display: flex; align-items: center; gap: 8px; }
+.slot-pick { flex: 1; display: flex; align-items: center; gap: 10px; text-align: left; padding: 6px; border-radius: 12px; min-height: 64px; }
+.slot-img { width: 52px; flex: none; }
+.slot-text { display: grid; gap: 2px; min-width: 0; }
+.slot-text span { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slot-text .error { margin: 0; }
+.pick-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.pick-head h2 { margin: 0; }
+dialog .picker-side { max-height: 70vh; }
+/* 弹窗比页面窄（手机约 334 px），选择器网格放小一点，保持 2 列 */
+dialog .picker-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }

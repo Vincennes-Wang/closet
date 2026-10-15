@@ -107,7 +107,8 @@
 - 图片存储格式：长边缩到 1024，不存原图。有透明区域的图存 WebP；浏览器不能输出带透明的 WebP 时存 PNG。没有透明区域的图存 JPEG 0.9。启动时用 `image.js` 的 `probeWebpAlpha()` 检测，结果显示在页面"关于"区。
 - WebP 透明实测：Mac Chrome 155 可以；Mac Safari 27.0.1 不可以（`toBlob('image/webp')` 返回 `image/png`），所以 Safari 上透明图存 PNG。iPhone（iOS 27，2026-10-11 真机）：同样返回 `image/png`，透明图存 PNG。
 - 衣物记录字段见 `store.js` 的 `newItem()`：分类只存 `categoryId`、`subcategoryId`（来自 `taxonomy.js`），季节、场景的取值在 `options.js`。改了取值要考虑已存数据。
-- `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v3：`items` 衣物、`queue` 待确认照片、`meta` 任务状态 `job` 和本设备设置 `device`、`categories` 自建分类和改名/隐藏）。改表结构必须升版本号并写迁移。例外：v1 → v2、v2 → v3 经用户确认直接清空，不迁移。
+- `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v4：`items` 衣物、`queue` 待确认照片、`meta` 任务状态 `job` 和本设备设置 `device`、`categories` 自建分类和改名/隐藏、`outfits` 搭配、`plans` 计划（阶段 5）、`thumbs` 缩略图）。改表结构必须升版本号并写迁移。例外：v1 → v2、v2 → v3 经用户确认直接清空，不迁移。
+- 迁移规则（2026-10-15，v3 → v4 起）：`onupgradeneeded` 每个 `oldVersion < N` 分支只做上一版到这一版的变化；新装（oldVersion 0）依次执行全部分支。测试用旧版 `store.js` 原文作固件（`tests/fixtures/store-vN.js`，注明来源提交，只改 import 路径）建库写数据，再用新代码打开核对；另测从 0 建库。旧代码遇到更高版本（VersionError）时显示"有新版本，请刷新"并让 Service Worker 检查更新；被别的标签页挡住时提示关闭其他页面（`app.js` `openOrExplain`）。上线前提醒用户先导出备份（IndexedDB 不能降版本，回退要清空后导入备份）。
 - Service Worker 缓存名 `closet-vN`（`sw.js`）。改了任何应用文件，发布前把 N 加 1，否则用户手机上一直是旧版本。
 - Safari 坑（2026-10-11 确认）：从 IndexedDB 读出的 Blob 不能原样 put 回去，否则本次会话里该记录的图片读不出来（"The object can not be found here"，刷新后恢复）。`store.update()` 先复制成新 Blob 再写入。以后任何"读出再写回"带 Blob 的记录都要这样做。Chrome 不复现，只能在 Safari 验证。
 - Safari 坑二（2026-10-11 确认，2a）：记录被改写后，改写前读出的 Blob 也读不出来（`createImageBitmap` 报 "An error occured reading the Blob argument"）。改写记录后要用改写后的新 Blob（`queue.js` 用 `markProcessing()` 的返回值）。
@@ -130,6 +131,7 @@
 - 格式 `formatVersion: 1`：`manifest.json`（formatVersion、exportedAt、appVersion = SW 缓存名、dbVersion、itemCount、全部衣物记录含已归档、categories 表全部记录；图片字段写成 ZIP 内文件名）+ `images/<id>.webp|png|jpg`。不导出 queue、meta（job、device、backup）。
 - 导入：先 `parseBackup()` 全部校验（版本、衣物字段 `store.validate()`、分类 `taxonomy.js` `categoryError()`（内置组合或备份里的自建分类）、每张图存在且 CRC 正确），再 `store.importData()` 一个事务写入。合并：衣物和分类记录 id 已存在就跳过（不覆盖本机修改）。任何一步失败数据库不变。图片复制成新 Blob 再写入（Safari 坑）。
 - 改了衣物字段（`store.js` `newItem()`）必须同时改 `backup.js` `FIELDS`，`FORMAT_VERSION` 加 1，并保留旧版本的导入。
+- `formatVersion: 2`（2026-10-15）：manifest 加 `outfitCount`、`outfits`、`plans`（`outfit.js` `validateOutfit`、`validatePlan` 校验）。导入 1 和 2 都认（v1 视为没有搭配）。不导出 `thumbs`（缺了会重新生成）。
 - 导出：手机（`pointer: coarse` 且支持 `navigator.canShare({ files })`）用分享菜单（iPhone"存储到文件"），其他用下载。分享报 NotAllowedError（生成 ZIP 太久，不再算用户点击）时显示"保存备份文件"按钮让用户再点一次。分享成功或已下载才记录备份时间（`meta.backup`，本机，不导出）。
 - 页头"上次备份：今天 / N 天前 / 还没有备份"；超过 7 天、或有衣物却从未备份时用提醒色 `--warn`。处理照片时隐藏备份卡片。
 
@@ -139,7 +141,15 @@
 - 衣橱筛选存 URL hash（`#c=top&sub=top.shirt&season=春,夏&scene=通勤`，`history.replaceState`），`location.reload()` 后保留。解析时丢掉不存在或已隐藏的分类。4b 的选择器不写 hash。
 - 一级分类图标是 `taxonomy.js` 的 `icon`（emoji），自建一级用 `CUSTOM_ICON`。
 - 已归档不进网格，衣橱下方"已归档（N 件）"按钮展开。
-- 布局截图：`node tools/shots.mjs <输出目录>`（390 px 和 1280 px）。
+- 布局截图：`node tools/shots.mjs <输出目录>`（390 px 和 1280 px，含搭配页、编辑弹窗、槽位选择器）。
+
+### 阶段 4b 搭配（2026-10-15）
+- 槽位 7 行（`outfit.js` `SLOTS`，用户 2026-10-15 选择）：外套（可空）、上衣、连衣裙 / 套装（可空，`skirt.dress` + `set`）、下装（`bottom` + `skirt.skirt`）、鞋、包（可空）、配饰（可空，`accessory` + `hat`）。连衣裙 / 套装填了，上衣和下装可空；鞋必填。自建二级跟随所属一级；自建一级不进任何槽位（4c 再定）。
+- 搭配记录 `{ id, createdAt, updatedAt, name, scenes, slots }`，槽位存衣物 id。季节不存，`outfitSeasons()` = 在场衣物季节的交集（已删除、已归档不参与）。
+- 衣物删除或归档后，搭配保留 id，卡片和编辑里显示"已删除"/"已归档"；保存时 `outfitError` 要求重新选择。归档、彻底删除前，衣物在搭配里时先提示"这件衣服在 N 套搭配里"。
+- 页面切换"衣橱 | 搭配"存在 hash（`v=outfits`），和衣橱筛选参数合并（`app.js` `writeHash`）。搭配编辑在 `#editDialog` 里，点槽位后同一个弹窗换成选择器（`createPicker` `mode: 'single'`），不叠两层弹窗。
+- 缩略图：网格、搭配卡片、槽位都用 `thumbs.js` `createImageLoader`（IntersectionObserver，提前 300 px；离开视口释放 object URL）。缩略图长边 `THUMB_SIDE`，存 `thumbs` 表，没有就用原图生成；删除衣物时同一事务删缩略图。编辑弹窗大图仍用原图。4a 网格用原图：40 件 1024 图解码约 160 MB，改后 2.5–4.5 MB（`node tools/memory.mjs <旧版目录>`）。
+- 测试数据页 `tests/seed.html?items=40&outfits=20`：只在本机测试服务器上用，会清空该网址的数据库。
 
 ### 配色（2026-10-11）
 - 阿根廷蓝白：`style.css` 顶部的变量。天蓝 `#74acdf` 用于国旗条和选中状态（配墨蓝字）；深蓝 `#1f5a8e` 用于操作按钮（白字）；金色 `#f6b40e` 只用在页头的五月太阳。页头是简化国旗（上下天蓝条 + 白底）。
@@ -156,11 +166,11 @@
 | 标签向量 | `label-embeddings.json`（根目录，应用用） | – | `node tools/embed.mjs` 用 fashionSigLIP fp32 文本模型生成，内容来自 `taxonomy.js`。改了英文 prompt 必须重新生成，测试会检查。`spike/label-embeddings.json` 只给 spike 用 |
 
 ## 目录
-- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`backup.js` 备份 ZIP、`picker.js` 衣物选择器、`check.html` 网络检查、`sw.js`、`manifest.webmanifest`、`icons/`）。
+- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`backup.js` 备份 ZIP、`picker.js` 衣物选择器、`outfit.js` 搭配规则、`thumbs.js` 缩略图按需加载、`check.html` 网络检查、`sw.js`、`manifest.webmanifest`、`icons/`）。
 - `vendor/`：第三方库（transformers.js、ONNX Runtime），见 `vendor/README.md`。
 - `docs/HISTORY.md`：PROGRESS.md 移出的旧记录。
 - `tests/`：`node --test tests/*.test.mjs`。`store.test.mjs` 测纯函数；`browser.test.mjs` 用 headless Chrome（CDP，`tests/cdp.mjs`，无依赖）测真实 IndexedDB、录入流程、抠图队列（假模型）和离线打开。模拟崩溃用"处理中直接重新打开页面"，不用 CDP `Page.crash`（装了 Service Worker 后崩溃后的导航不返回）。需要本机装有 Chrome。
-- `tools/`：Mac 上运行的脚本。`embed.mjs` 生成标签向量；`eval.mjs` 用 `private/samples` + `private/labels.json` 算分类准确率；`shots.mjs` 布局截图。都用 headless Chrome（`tests/cdp.mjs`），不加依赖。
+- `tools/`：Mac 上运行的脚本。`embed.mjs` 生成标签向量；`eval.mjs` 用 `private/samples` + `private/labels.json` 算分类准确率；`shots.mjs` 布局截图；`memory.mjs` 图片内存对照（`--serve` 给 Safari 手动测）。都用 headless Chrome（`tests/cdp.mjs`），不加依赖。
 - `spike/`：阶段 0 验证页（`index.html` 单文件）和预计算的标签向量 `label-embeddings.json`。
 - `private/`：本地测试照片等，不提交（`private/samples/` 放样本照片）。
 

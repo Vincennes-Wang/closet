@@ -11,12 +11,14 @@ const CHROME = process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/M
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.wasm': 'application/wasm' };
 
-export async function startServer() {
+// root：要服务的目录（默认本仓库；tools/memory.mjs 用它服务旧版本做对照）
+export async function startServer(root = ROOT) {
   const server = createServer(async (req, res) => {
     let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     if (path.endsWith('/')) path += 'index.html';
-    const file = join(ROOT, path);
-    if (!file.startsWith(ROOT) || file.includes('/private/')) { res.writeHead(403).end(); return; }
+    const file = join(root, path);
+    // 不服务仓库的 private/（只看网址路径：root 本身可能在 /private/tmp 下）
+    if (!file.startsWith(root) || path.split('/').includes('private')) { res.writeHead(403).end(); return; }
     try {
       const body = await readFile(file);
       res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' }).end(body);

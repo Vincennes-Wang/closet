@@ -1,6 +1,7 @@
 // 在 headless Chrome 里测 store.js（真实 IndexedDB）和应用录入流程
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { startServer, launchChrome } from './cdp.mjs';
 
 let server, chrome;
@@ -175,6 +176,9 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
   await chrome.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
   await chrome.reload();
   await chrome.waitFor(`document.querySelectorAll('#closet .tile').length === 1`);
+  // "关于"区显示当前缓存版本（和 sw.js 一致）
+  const cache = (await readFile(new URL('../sw.js', import.meta.url), 'utf8')).match(/closet-v\d+/)[0];
+  await chrome.waitFor(`document.getElementById('version').textContent === '版本 ${cache}'`);
   // 本站的 transformers.js 和 ONNX Runtime 也在离线缓存里（国内打不开 jsDelivr）
   const vendor = await chrome.evaluate(`Promise.all(['transformers.min.js', 'ort-wasm-simd-threaded.asyncify.mjs', 'ort-wasm-simd-threaded.asyncify.wasm']
     .map((f) => fetch('vendor/transformers-4.3.1/' + f).then(async (r) => r.ok && (await r.arrayBuffer()).byteLength)))`);
@@ -519,10 +523,10 @@ const SNAPSHOT = `(async () => {
   const s = await openStore(); const d = await s.exportData(); s.close();
   const byId = (a, b) => (a.id < b.id ? -1 : 1);
   const items = await Promise.all(d.items.sort(byId).map(async (it) => ({ ...it, image: { type: it.image.type, bytes: Array.from(new Uint8Array(await it.image.arrayBuffer())) } })));
-  return { items, categories: d.categories.sort(byId) };
+  return { items, categories: d.categories.sort(byId), outfits: d.outfits.sort(byId), plans: d.plans.sort(byId) };
 })()`;
 
-// 页面里准备数据：3 件衣物（1 张透明 PNG，1 件已归档）+ 分类表 2 条（自建 1 条、内置改名 + 隐藏 1 条）
+// 页面里准备数据：3 件衣物（1 张透明 PNG，1 件已归档）+ 分类表 2 条（自建 1 条、内置改名 + 隐藏 1 条）+ 搭配 1 套 + 计划 1 条
 const SEED = `(async () => {
   const { openStore } = await import('/store.js');
   const s = await openStore();
@@ -532,12 +536,14 @@ const SEED = `(async () => {
     x.fillStyle = '#336'; x.fillRect(5, 5, 20, 20);
     return c.convertToBlob({ type, quality: 0.9 });
   };
-  await s.add({ image: await img('image/png', true, 50), hasAlpha: true, categoryId: 'top', subcategoryId: 'top.casual_tee', seasons: ['夏'], scenes: ['休闲'], name: '白T', color: '白' });
-  await s.add({ image: await img('image/jpeg', false, 60), hasAlpha: false, categoryId: 'bottom', subcategoryId: 'bottom.jeans', seasons: [], scenes: [] });
+  const a = await s.add({ image: await img('image/png', true, 50), hasAlpha: true, categoryId: 'top', subcategoryId: 'top.casual_tee', seasons: ['夏'], scenes: ['休闲'], name: '白T', color: '白' });
+  const b = await s.add({ image: await img('image/jpeg', false, 60), hasAlpha: false, categoryId: 'bottom', subcategoryId: 'bottom.jeans', seasons: [], scenes: [] });
   const c = await s.add({ image: await img('image/webp', true, 70), hasAlpha: true, categoryId: 'bag', subcategoryId: null, seasons: ['冬'], scenes: [] });
   await s.archive(c.id);
   await s.putCategoryRow({ id: 'u1', parentId: 'top', zh: 'polo', hidden: false, builtin: false });
   await s.putCategoryRow({ id: 'top.vest', zh: '吊带', hidden: true });
+  const o = await s.putOutfit({ id: 'outfit-1', name: '周末', scenes: ['休闲'], slots: { top: a.id, bottom: b.id, shoes: 'gone' } });
+  await s.importData({ items: [], categories: [], plans: [{ id: 'plan-1', createdAt: 1, date: '2026-10-19', outfitId: o.id }] });
   s.close();
 })()`;
 
@@ -578,6 +584,8 @@ test('备份：导出 → 清空 → 导入，衣物、分类表、图片字节�
   const before = await chrome.evaluate(SNAPSHOT);
   assert.equal(before.items.length, 3);
   assert.equal(before.items.filter((i) => i.archived).length, 1);
+  assert.equal(before.outfits.length, 1);
+  assert.equal(before.plans.length, 1);
   await chrome.goto(`${server.origin}/`);
   await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
   await chrome.evaluate(MAKE_BACKUP());
@@ -589,10 +597,10 @@ test('备份：导出 → 清空 → 导入，衣物、分类表、图片字节�
   await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
   assert.equal(await chrome.evaluate(`document.querySelectorAll('#closet .tile').length`), 0);
   await chrome.evaluate(`window.__zip = new Blob([Uint8Array.from(atob('${zipB64}'), (c) => c.charCodeAt(0))])`);
-  assert.equal(await chrome.evaluate(IMPORT_VIA_UI), '新增 3 件，跳过 0 件');
+  assert.equal(await chrome.evaluate(IMPORT_VIA_UI), '新增 3 件，跳过 0 件；搭配新增 1 套');
   assert.deepEqual(await chrome.evaluate(SNAPSHOT), before);
   await chrome.waitFor(`document.querySelectorAll('#closet .tile').length === 2`); // 已归档的不显示
-  assert.equal(await chrome.evaluate(IMPORT_VIA_UI), '新增 0 件，跳过 3 件');
+  assert.equal(await chrome.evaluate(IMPORT_VIA_UI), '新增 0 件，跳过 3 件；搭配新增 0 套');
   assert.deepEqual(await chrome.evaluate(SNAPSHOT), before);
 });
 
@@ -605,7 +613,8 @@ test('备份：版本不对、缺图片、分类不存在，都整体失败，�
   // 备份里的衣物换成新 id（否则已存在会被跳过，看不出是否整体失败）；坏的放在最后一件
   const renew = `(m, files) => { for (const it of m.items) { const f = files.get(it.image); files.delete(it.image); it.id = 'new-' + it.id; it.image = it.image.replace('images/', 'images/new-'); files.set(it.image, f); } }`;
   const cases = [
-    [`(m, files) => { (${renew})(m, files); m.formatVersion = 2; }`, /^导入失败：不认识的备份版本：2$/],
+    [`(m, files) => { (${renew})(m, files); m.formatVersion = 3; }`, /^导入失败：不认识的备份版本：3$/],
+    [`(m, files) => { (${renew})(m, files); m.outfits[0].id = 'new-o'; m.outfits[0].scenes = ['上班']; }`, /^导入失败：第 1 个搭配：搭配无效：scenes 含无效值：上班$/],
     [`(m, files) => { (${renew})(m, files); files.delete(m.items.at(-1).image); }`, /^导入失败：第 3 件衣物缺少图片/],
     [`(m, files) => { (${renew})(m, files); m.items.at(-1).categoryId = 'top'; m.items.at(-1).subcategoryId = 'top.nope'; }`, /^导入失败：第 3 件衣物.*top\.nope/],
   ];
@@ -617,7 +626,23 @@ test('备份：版本不对、缺图片、分类不存在，都整体失败，�
   }
   // 对照：同样换新 id、不篡改时能导入（证明上面的失败不是因为换 id）
   await chrome.evaluate(MAKE_BACKUP(renew));
-  assert.equal(await chrome.evaluate(IMPORT_VIA_UI), '新增 3 件，跳过 0 件');
+  assert.equal(await chrome.evaluate(IMPORT_VIA_UI), '新增 3 件，跳过 0 件；搭配新增 0 套');
+});
+
+test('备份：旧版 v1 备份（没有搭配）仍能导入', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.evaluate(SEED);
+  const before = await chrome.evaluate(SNAPSHOT);
+  await chrome.evaluate(MAKE_BACKUP(`(m) => { m.formatVersion = 1; delete m.outfits; delete m.plans; delete m.outfitCount; }`));
+  const zipB64 = await chrome.evaluate(`(async () => { const b = new Uint8Array(await window.__zip.arrayBuffer()); let s = ''; for (const x of b) s += String.fromCharCode(x); return btoa(s); })()`);
+  await chrome.evaluate(deleteDb);
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  await chrome.evaluate(`window.__zip = new Blob([Uint8Array.from(atob('${zipB64}'), (c) => c.charCodeAt(0))])`);
+  assert.equal(await chrome.evaluate(IMPORT_VIA_UI), '新增 3 件，跳过 0 件；搭配新增 0 套');
+  const after = await chrome.evaluate(SNAPSHOT);
+  assert.deepEqual(after, { ...before, outfits: [], plans: [] });
 });
 
 test('备份：页头显示上次备份时间，超过 7 天用提醒样式', async () => {
@@ -659,4 +684,209 @@ test('备份：importData 写入中途出错时整个事务回滚', async () => 
   })()`);
   assert.equal(err, 'DataError');
   assert.deepEqual(await chrome.evaluate(SNAPSHOT), before);
+});
+
+// ---------- 阶段 4b：数据库 v4、搭配、缩略图 ----------
+const rawStores = `new Promise((ok) => { const r = indexedDB.open('closet'); r.onsuccess = () => { const db = r.result;
+  const out = { version: db.version, names: [...db.objectStoreNames].sort(), planIndexes: db.objectStoreNames.contains('plans') ? [...db.transaction('plans').objectStore('plans').indexNames] : [] };
+  db.close(); ok(out); }; })`;
+
+test('数据库：用 v3 时期的 store.js（d585793）建库写数据，新版打开后全部还在，图片字节一致，新表已建', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  const r = await chrome.evaluate(`(async () => {
+    const bytes = (b) => b.arrayBuffer().then((x) => Array.from(new Uint8Array(x)));
+    const c = new OffscreenCanvas(60, 40); c.getContext('2d').fillRect(5, 5, 20, 20);
+    const image = await c.convertToBlob({ type: 'image/png' });
+    const old = await import('/tests/fixtures/store-v3.js');
+    let s = await old.openStore();
+    const item = await s.add({ image, hasAlpha: true, categoryId: 'top', subcategoryId: 'top.shirt', seasons: ['春'], scenes: ['通勤'], name: '衬衫' });
+    await s.archive((await s.add({ image, hasAlpha: true, categoryId: 'bag', subcategoryId: null, seasons: [], scenes: [] })).id);
+    const q = await s.enqueue({ original: image, hasAlpha: false, thumb: image });
+    await s.setJob({ running: false, phase: 'classify', events: [{ e: 'start' }] });
+    await s.setDevice({ noWebgpu: true });
+    await s.setBackupAt(123);
+    await s.putCategoryRow({ id: 'u1', parentId: 'top', zh: 'polo', hidden: false, builtin: false });
+    const v3 = await ${rawStores.replace(/`/g, '\\`')};
+    s.close();
+    const { openStore } = await import('/store.js');
+    s = await openStore();
+    const items = await s.list({ includeArchived: true });
+    const got = items.find((i) => i.id === item.id);
+    const queue = await s.listQueue();
+    const out = {
+      v3, v4: null, itemCount: items.length, name: got.name, archived: items.filter((i) => i.archived).length,
+      sameImage: JSON.stringify(await bytes(got.image)) === JSON.stringify(await bytes(image)),
+      queueIds: queue.map((x) => x.id), queueImage: JSON.stringify(await bytes(queue[0].original)) === JSON.stringify(await bytes(image)),
+      job: (await s.getJob()).phase, device: await s.getDevice(), backupAt: await s.getBackupAt(),
+      categories: (await s.listCategoryRows()).map((x) => x.id), outfits: (await s.listOutfits()).length, qid: q.id,
+    };
+    s.close();
+    out.v4 = await ${rawStores.replace(/`/g, '\\`')};
+    return out;
+  })()`);
+  assert.deepEqual(r.v3.names, ['categories', 'items', 'meta', 'queue']);
+  assert.equal(r.v3.version, 3);
+  assert.deepEqual(r.v4, { version: 4, names: ['categories', 'items', 'meta', 'outfits', 'plans', 'queue', 'thumbs'], planIndexes: ['date'] });
+  assert.equal(r.itemCount, 2);
+  assert.equal(r.archived, 1);
+  assert.equal(r.name, '衬衫');
+  assert.equal(r.sameImage, true);
+  assert.deepEqual(r.queueIds, [r.qid]);
+  assert.equal(r.queueImage, true);
+  assert.equal(r.job, 'classify');
+  assert.deepEqual(r.device, { noWebgpu: true });
+  assert.equal(r.backupAt, 123);
+  assert.deepEqual(r.categories, ['u1']);
+  assert.equal(r.outfits, 0);
+});
+
+test('数据库：新装（从 0 建库）每张表只建一次，共 7 张', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  const r = await chrome.evaluate(`(async () => { const { openStore } = await import('/store.js'); const s = await openStore(); s.close(); return ${rawStores}; })()`);
+  assert.deepEqual(r, { version: 4, names: ['categories', 'items', 'meta', 'outfits', 'plans', 'queue', 'thumbs'], planIndexes: ['date'] });
+});
+
+test('数据库：旧代码请求低版本（VersionError）时显示"有新版本，请刷新"，没有未捕获的错误', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.evaluate(`import('/store.js').then(async (m) => (await m.openStore()).close())`);
+  const { identifier } = await chrome.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__errors = [];
+    addEventListener('error', (e) => __errors.push(String(e.message))); addEventListener('unhandledrejection', (e) => __errors.push(String(e.reason)));` });
+  try {
+    await chrome.goto(`${server.origin}/?fakeDbVersion=3`);
+    await chrome.waitFor(`document.documentElement.dataset.ready === 'fatal'`);
+    assert.equal(await chrome.evaluate(`document.querySelector('#fatal p').textContent`), '有新版本，请刷新');
+    assert.equal(await chrome.evaluate(`document.querySelector('#fatal button').textContent`), '刷新');
+    assert.equal(await chrome.evaluate(`getComputedStyle(document.getElementById('views')).display`), 'none');
+    await new Promise((ok) => setTimeout(ok, 300));
+    assert.deepEqual(await chrome.evaluate('window.__errors'), []);
+  } finally { await chrome.send('Page.removeScriptToEvaluateOnNewDocument', { identifier }); }
+});
+
+// 4 件衣物：衬衫、牛仔裤、运动鞋、连衣裙（600×400，缩略图长边 256）
+const SEED_OUTFIT = `(async () => {
+  const { openStore } = await import('/store.js');
+  const s = await openStore();
+  const add = async (categoryId, subcategoryId, seasons, name) => {
+    const c = new OffscreenCanvas(600, 400); c.getContext('2d').fillRect(100, 100, 300, 200);
+    return (await s.add({ image: await c.convertToBlob({ type: 'image/png' }), hasAlpha: true, categoryId, subcategoryId, seasons, scenes: [], name })).id;
+  };
+  const ids = { shirt: await add('top', 'top.shirt', ['春', '秋'], '衬衫'), jeans: await add('bottom', 'bottom.jeans', ['春', '秋', '冬'], '牛仔裤'),
+    shoes: await add('shoes', 'shoes.sneakers', ['春', '秋'], '运动鞋'), dress: await add('skirt', 'skirt.dress', ['春', '夏', '秋'], '连衣裙') };
+  s.close();
+  return ids;
+})()`;
+const clickText = (scope, text) => `[...document.querySelectorAll('${scope} button')].find((b) => b.textContent === '${text}').click()`;
+const pickSlot = (slot, name) => `(async () => {
+  document.querySelector('.slot-row[data-slot="${slot}"] .slot-pick').click();
+  const tile = [...document.querySelectorAll('#editForm .tile')].find((t) => t.textContent === '${name}');
+  const count = document.querySelectorAll('#editForm .tile').length;
+  tile.click();
+  return count;
+})()`;
+const outfitCards = `[...document.querySelectorAll('#outfitList .outfit-card')].map((c) => ({ name: c.querySelector('.outfit-name').textContent, meta: c.querySelector('.muted').textContent, missing: [...c.querySelectorAll('.slot-missing')].map((m) => m.textContent) }))`;
+const storeCall = (expr) => `(async () => { const { openStore } = await import('/store.js'); const s = await openStore(); try { return await (${expr}); } finally { s.close(); } })()`;
+
+test('搭配：界面新建（上衣 + 下装 + 鞋；连衣裙 + 鞋），缺鞋时提示，刷新后还在；归档 / 删除在搭配里的衣物先提示，搭配显示"已归档"/"已删除"', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  const ids = await chrome.evaluate(SEED_OUTFIT);
+  await chrome.goto(`${server.origin}/#v=outfits`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  assert.equal(await chrome.evaluate(`document.getElementById('outfitsEmpty').hidden`), false);
+
+  // 第一套：名称、场景、上衣 + 下装 + 鞋。上衣槽位只列出上衣
+  await chrome.evaluate(`document.getElementById('newOutfit').click()`);
+  await chrome.waitFor(`document.getElementById('editDialog').open`);
+  await chrome.evaluate(`document.querySelector('#editForm input').value = '周一通勤'`);
+  await chrome.evaluate(clickText('#editForm .chips', '通勤'));
+  assert.equal(await chrome.evaluate(pickSlot('top', '衬衫')), 1);
+  assert.equal(await chrome.evaluate(pickSlot('bottom', '牛仔裤')), 1);
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  assert.equal(await chrome.evaluate(`document.querySelector('#editForm p.error').textContent`), '请选择鞋');
+  assert.equal(await chrome.evaluate(pickSlot('shoes', '运动鞋')), 1);
+  // 选择器切回编辑视图后，名称和场景还在
+  assert.equal(await chrome.evaluate(`document.querySelector('#editForm input').value`), '周一通勤');
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+
+  // 第二套：连衣裙 + 鞋，上衣和下装可空
+  await chrome.evaluate(`document.getElementById('newOutfit').click()`);
+  await chrome.waitFor(`document.getElementById('editDialog').open`);
+  assert.equal(await chrome.evaluate(pickSlot('onepiece', '连衣裙')), 1);
+  assert.equal(await chrome.evaluate(pickSlot('shoes', '运动鞋')), 1);
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  await chrome.waitFor(`document.querySelectorAll('#outfitList .outfit-card').length === 2`);
+
+  // 刷新后仍在搭配页，两套都在；季节 = 交集
+  await chrome.reload();
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1' && document.querySelectorAll('#outfitList .outfit-card').length === 2`);
+  const cards = await chrome.evaluate(outfitCards);
+  assert.deepEqual(cards.map((c) => c.name).sort(), ['周一通勤', '未命名搭配']);
+  assert.equal(cards.find((c) => c.name === '周一通勤').meta, '通勤 · 春秋');
+  const saved = await chrome.evaluate(storeCall(`s.listOutfits()`));
+  assert.deepEqual(saved.find((o) => o.name === '周一通勤').slots, { outer: null, top: ids.shirt, onepiece: null, bottom: ids.jeans, shoes: ids.shoes, bag: null, accessory: null });
+  assert.deepEqual(saved.find((o) => o.name === '周一通勤').scenes, ['通勤']);
+
+  // 归档运动鞋：先提示在 2 套搭配里
+  await chrome.evaluate(`window.confirm = (m) => { window.__confirm = m; return true; }`);
+  await chrome.evaluate(clickText('#views', '衣橱'));
+  await chrome.waitFor(`document.querySelectorAll('#closet .tile').length === 4`);
+  // 网格缩略图已生成（来自 thumbs 表）
+  await chrome.waitFor(storeCall(`s.getThumb('${ids.shoes}')`) + `.then((b) => b !== null)`);
+  await chrome.evaluate(`[...document.querySelectorAll('#closet .tile')].find((t) => t.textContent === '运动鞋').click()`);
+  await chrome.evaluate(clickText('#editForm', '归档'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  assert.equal(await chrome.evaluate('window.__confirm'), '这件衣服在 2 套搭配里，归档后这些搭配里显示"已归档"。确定吗？');
+  await chrome.evaluate(clickText('#views', '搭配'));
+  await chrome.waitFor(`document.querySelectorAll('#outfitList .slot-missing').length === 2`);
+  assert.deepEqual((await chrome.evaluate(outfitCards)).map((c) => c.missing), [['已归档'], ['已归档']]);
+  // 搭配里有已归档的衣物，保存时要求重新选择；鞋槽位的选择器不显示已归档的鞋
+  await chrome.evaluate(`document.querySelector('#outfitList .outfit-card').click()`);
+  await chrome.waitFor(`document.getElementById('editDialog').open`);
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  assert.equal(await chrome.evaluate(`document.querySelector('#editForm p.error').textContent`), '鞋已归档，请重新选择');
+  await chrome.evaluate(`document.querySelector('.slot-row[data-slot="shoes"] .slot-pick').click()`);
+  assert.equal(await chrome.evaluate(`document.querySelectorAll('#editForm .tile').length`), 0);
+  await chrome.evaluate(clickText('#editForm', '← 返回'));
+  await chrome.evaluate(clickText('#editForm', '取消'));
+
+  // 彻底删除：先提示，删除后搭配显示"已删除"，缩略图也删掉
+  await chrome.evaluate(clickText('#views', '衣橱'));
+  await chrome.evaluate(`document.getElementById('archivedBtn').click()`);
+  await chrome.waitFor(`document.querySelectorAll('#archived .tile').length === 1`);
+  await chrome.evaluate(`document.querySelector('#archived .tile').click()`);
+  await chrome.evaluate(clickText('#editForm', '彻底删除'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  assert.equal(await chrome.evaluate('window.__confirm'), '这件衣服在 2 套搭配里，删除后这些搭配里显示"已删除"，彻底删除后无法恢复，确定吗？');
+  assert.equal(await chrome.evaluate(storeCall(`s.getThumb('${ids.shoes}')`)), null);
+  await chrome.evaluate(clickText('#views', '搭配'));
+  await chrome.waitFor(`document.querySelectorAll('#outfitList .slot-missing').length === 2`);
+  assert.deepEqual((await chrome.evaluate(outfitCards)).map((c) => c.missing), [['已删除'], ['已删除']]);
+  // 提示时点"取消"：不归档，弹窗不关
+  await chrome.evaluate(clickText('#views', '衣橱'));
+  await chrome.evaluate(`[...document.querySelectorAll('#closet .tile')].find((t) => t.textContent === '连衣裙').click()`);
+  await chrome.evaluate(`window.confirm = (m) => { window.__confirm = m; return false; }`);
+  await chrome.evaluate(clickText('#editForm', '归档'));
+  await chrome.waitFor(`window.__confirm.startsWith('这件衣服在 1 套搭配里')`);
+  assert.equal(await chrome.evaluate(`document.getElementById('editDialog').open`), true);
+  assert.equal(await chrome.evaluate(storeCall(`s.get('${ids.dress}').then((i) => i.archived)`)), false);
+});
+
+test('缩略图：网格用 thumbs 表里的缩略图；已有的直接用，不重新生成；没有的生成长边 256 并保存', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  const ids = await chrome.evaluate(SEED_OUTFIT);
+  // 给衬衫预先放一张 10×10 的缩略图：网格显示 10 px 宽就说明用的是已存的，没有重新生成
+  await chrome.evaluate(storeCall(`(async () => { const c = new OffscreenCanvas(10, 10); c.getContext('2d').fillRect(0, 0, 10, 10); await s.putThumb('${ids.shirt}', await c.convertToBlob({ type: 'image/png' })); })()`));
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  const widths = `Object.fromEntries([...document.querySelectorAll('#closet .tile')].map((t) => [t.textContent, t.querySelector('img').naturalWidth]))`;
+  await chrome.waitFor(`Object.values(${widths}).every((w) => w > 0)`);
+  assert.deepEqual(await chrome.evaluate(widths), { 衬衫: 10, 牛仔裤: 256, 运动鞋: 256, 连衣裙: 256 });
+  assert.equal(await chrome.evaluate(`[...document.querySelectorAll('#closet .tile img')].every((i) => i.src.startsWith('blob:'))`), true);
+  assert.equal(await chrome.evaluate(storeCall(`s.getThumb('${ids.jeans}').then((b) => b.size > 0)`)), true);
 });
