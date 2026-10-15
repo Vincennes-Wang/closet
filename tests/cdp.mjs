@@ -71,6 +71,12 @@ export async function launchChrome() {
     while (Date.now() < end) { if (await evaluate(expression).catch(() => false)) return; await sleep(100); }
     throw new Error(`等待超时：${expression}`);
   }
+  // 按给定视口宽高截图（整页），返回 PNG Buffer。mobile 时按手机渲染（触屏、3 倍像素）
+  async function screenshot(width, height, { mobile = false } = {}) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: mobile ? 3 : 1, mobile });
+    const { data } = await send('Page.captureScreenshot', { format: 'png' });
+    return Buffer.from(data, 'base64');
+  }
   async function close() { ws.close(); proc.kill(); await rm(dir, { recursive: true, force: true }).catch(() => {}); }
-  return { send, evaluate, goto, reload, waitFor, close };
+  return { send, evaluate, goto, reload, waitFor, screenshot, close };
 }

@@ -5,7 +5,7 @@
 const SPRING_AUTUMN = ['春', '秋'];
 
 export const CATEGORIES = [
-  { id: 'top', zh: '上衣', subs: [
+  { id: 'top', icon: '👕', zh: '上衣', subs: [
     // 短袖分两类（用户 2026-10-11 决定）：休闲（T 恤、Polo 衫）和运动（速干面料）。Polo 衫写进休闲短袖的 prompt，否则会被判成衬衫
     { id: 'top.casual_tee', zh: '休闲短袖', en: 'a casual short-sleeve t-shirt or polo shirt', seasons: ['夏'] },
     { id: 'top.sport_tee', zh: '运动短袖', en: 'a short-sleeve athletic sports t-shirt made of technical fabric', seasons: ['夏'] },
@@ -17,13 +17,13 @@ export const CATEGORIES = [
     // 外搭：叠穿在外面的针织开衫、罩衫。prompt 强调"针织、开襟、叠穿"，和外套里的夹克、风衣区分
     { id: 'top.cardigan_layer', zh: '外搭', en: 'an open-front knit cardigan or light cover-up worn over a top', seasons: SPRING_AUTUMN },
   ] },
-  { id: 'outer', zh: '外套', subs: [
+  { id: 'outer', icon: '🧥', zh: '外套', subs: [
     { id: 'outer.trench_coat', zh: '风衣', en: 'a long belted trench coat', seasons: SPRING_AUTUMN },
     { id: 'outer.track_jacket', zh: '运动服', en: 'a zip-up athletic track jacket', seasons: SPRING_AUTUMN },
     { id: 'outer.wool_coat', zh: '呢子大衣', en: 'a long wool overcoat', seasons: ['冬'] },
     { id: 'outer.jacket', zh: '夹克', en: 'a short outerwear jacket such as a bomber, denim or leather jacket', seasons: SPRING_AUTUMN },
   ] },
-  { id: 'bottom', zh: '裤子', subs: [
+  { id: 'bottom', icon: '👖', zh: '裤子', subs: [
     { id: 'bottom.shorts', zh: '短裤', en: 'a pair of shorts', seasons: ['夏'] },
     { id: 'bottom.jeans', zh: '牛仔裤', en: 'a pair of denim jeans', seasons: ['春', '秋', '冬'] },
     { id: 'bottom.casual', zh: '休闲裤', en: 'a pair of casual chino trousers', seasons: SPRING_AUTUMN },
@@ -31,11 +31,11 @@ export const CATEGORIES = [
     { id: 'bottom.sweatpants', zh: '运动裤', en: 'a pair of jogger sweatpants', seasons: SPRING_AUTUMN },
     { id: 'bottom.leggings', zh: '打底裤', en: 'a pair of tight leggings', seasons: ['春', '秋', '冬'] },
   ] },
-  { id: 'skirt', zh: '裙子', subs: [
+  { id: 'skirt', icon: '👗', zh: '裙子', subs: [
     { id: 'skirt.dress', zh: '连衣裙', en: 'a dress', seasons: ['春', '夏', '秋'] },
     { id: 'skirt.skirt', zh: '半身裙', en: 'a skirt', seasons: ['春', '夏', '秋'] },
   ] },
-  { id: 'shoes', zh: '鞋', subs: [
+  { id: 'shoes', icon: '👟', zh: '鞋', subs: [
     { id: 'shoes.leather', zh: '皮鞋', en: 'a pair of leather dress shoes', seasons: SPRING_AUTUMN },
     { id: 'shoes.sneakers', zh: '运动鞋', en: 'a pair of athletic running sneakers', seasons: SPRING_AUTUMN },
     { id: 'shoes.skate', zh: '板鞋', en: 'a pair of flat low-top canvas skate shoes', seasons: SPRING_AUTUMN },
@@ -44,10 +44,10 @@ export const CATEGORIES = [
     { id: 'shoes.sandals', zh: '凉鞋', en: 'a pair of sandals', seasons: ['夏'] },
   ] },
   // 以下暂不设二级分类（用户 2026-10-11 确认）。季节规则没有给出，默认四季，用户可改
-  { id: 'set', zh: '套装', en: 'a matching two-piece outfit set', seasons: ['春', '夏', '秋', '冬'], subs: [] },
-  { id: 'bag', zh: '箱包', en: 'a bag or handbag', seasons: ['春', '夏', '秋', '冬'], subs: [] },
-  { id: 'accessory', zh: '配饰', en: 'a fashion accessory such as a scarf, belt or jewelry', seasons: ['春', '夏', '秋', '冬'], subs: [] },
-  { id: 'hat', zh: '帽子', en: 'a hat or cap', seasons: ['春', '夏', '秋', '冬'], subs: [] },
+  { id: 'set', icon: '🎽', zh: '套装', en: 'a matching two-piece outfit set', seasons: ['春', '夏', '秋', '冬'], subs: [] },
+  { id: 'bag', icon: '👜', zh: '箱包', en: 'a bag or handbag', seasons: ['春', '夏', '秋', '冬'], subs: [] },
+  { id: 'accessory', icon: '💍', zh: '配饰', en: 'a fashion accessory such as a scarf, belt or jewelry', seasons: ['春', '夏', '秋', '冬'], subs: [] },
+  { id: 'hat', icon: '🧢', zh: '帽子', en: 'a hat or cap', seasons: ['春', '夏', '秋', '冬'], subs: [] },
 ].map((c) => ({ ...c, builtin: true, subs: c.subs.map((s) => ({ ...s, builtin: true, categoryId: c.id })) }));
 
 const byId = new Map();
@@ -97,6 +97,9 @@ export function categoryError({ categoryId, subcategoryId }, rows = []) {
   return `分类无效：二级分类 ${subcategoryId} 不存在或不属于 ${categoryId}`;
 }
 
+// 自建一级分类的图标（阶段 4c 可能允许自选）
+export const CUSTOM_ICON = '🏷️';
+
 // 界面显示的分类 = 内置 + 用户自建 − 隐藏，并应用改名。
 // rows：IndexedDB categories 仓库的记录 { id, parentId|null, zh, hidden, builtin: false } 或对内置的 { id, zh?, hidden? }
 export function visibleTaxonomy(rows = []) {
@@ -106,12 +109,12 @@ export function visibleTaxonomy(rows = []) {
   const custom = rows.filter((r) => r.builtin === false && !r.hidden);
   return [
     ...CATEGORIES.filter(shown).map((c) => ({
-      id: c.id, zh: name(c), builtin: true,
+      id: c.id, icon: c.icon, zh: name(c), builtin: true,
       subs: [...c.subs.filter(shown).map((s) => ({ id: s.id, zh: name(s), builtin: true })),
         ...custom.filter((r) => r.parentId === c.id).map((r) => ({ id: r.id, zh: r.zh, builtin: false }))],
     })),
     ...custom.filter((r) => !r.parentId).map((r) => ({
-      id: r.id, zh: r.zh, builtin: false,
+      id: r.id, icon: CUSTOM_ICON, zh: r.zh, builtin: false,
       subs: custom.filter((s) => s.parentId === r.id).map((s) => ({ id: s.id, zh: s.zh, builtin: false })),
     })),
   ];

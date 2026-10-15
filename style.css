@@ -6,7 +6,9 @@
   color: var(--ink); background: var(--bg);
 }
 * { box-sizing: border-box; }
-body { margin: 0; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); max-width: 720px; margin-inline: auto; }
+body { margin: 0; padding: 0 16px calc(24px + env(safe-area-inset-bottom)); max-width: 1200px; margin-inline: auto; }
+/* 衣橱网格用满宽屏，其他区块保持 720 px 居中 */
+main > :not(#closet) { max-width: 720px; margin-inline: auto; }
 
 /* 页头 = 简化的国旗：上下天蓝条，中间白底放太阳和标题，通栏 */
 header {
@@ -49,8 +51,7 @@ label.primary { display: block; text-align: center; padding: 14px; font-size: 17
 .tile img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 8px; }
 .tile span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.toggle { display: block; margin: 24px 0 8px; font-size: 14px; color: var(--muted); }
-.toggle input { accent-color: var(--azul); }
+.archived-btn { display: block; margin-top: 24px; margin-bottom: 8px; font-size: 14px; color: var(--muted); }
 #archived .tile { opacity: .6; }
 
 /* 抠图队列 */
@@ -77,7 +78,7 @@ button.small { font-size: 13px; padding: 4px 10px; justify-self: start; }
 .toggle-inline input { accent-color: var(--azul); }
 /* 抠图进行中只显示进度，不渲染衣橱，少占内存 */
 body.processing #addLabel, body.processing #closet, body.processing #empty,
-body.processing .toggle, body.processing #archived, body.processing #backup { display: none; }
+body.processing #archivedBtn, body.processing #archived, body.processing #backup { display: none; }
 /* 备份：超过 7 天没备份（或有衣物却从未备份）时页头用提醒色。白底对比度约 6:1 */
 header .warn { color: var(--warn); font-weight: 600; }
 #backup h2 { margin-top: 4px; }
@@ -89,3 +90,27 @@ summary { cursor: pointer; color: var(--muted); }
 dialog { border: none; border-radius: 16px; padding: 16px; width: min(560px, 94vw); max-height: 90vh; color: var(--ink); }
 dialog:focus { outline: none; }
 dialog::backdrop { background: rgb(21 48 77 / 40%); }
+
+/* 衣物选择器（picker.js）：左边栏一级分类 + 右侧筛选和网格 */
+.picker { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; align-items: start; }
+.picker.fixed { grid-template-columns: minmax(0, 1fr); }
+/* 左边栏跟着页面停在顶部，分类多时自己滚动；网格随页面滚动 */
+.picker-side { position: sticky; top: env(safe-area-inset-top); max-height: calc(100dvh - env(safe-area-inset-top)); overflow-y: auto;
+  overscroll-behavior: contain; display: grid; gap: 4px; padding-bottom: 8px; scrollbar-width: none; }
+.picker-side::-webkit-scrollbar { display: none; }
+.side-item { display: grid; justify-items: center; gap: 1px; min-height: 60px; padding: 6px 2px; border-radius: 12px; font-size: 13px; line-height: 1.2; }
+.side-icon { font-size: 22px; line-height: 1; }
+.side-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-count { font-size: 11px; color: var(--muted); }
+.side-item.none .side-name, .side-item.none .side-icon { opacity: .4; }
+.side-item[aria-pressed="true"] { background: var(--celeste); border-color: var(--celeste); font-weight: 600; }
+.side-item[aria-pressed="true"] .side-count { color: var(--ink); }
+.picker-filters { display: grid; gap: 6px; margin-bottom: 8px; }
+.picker-filters .chip { font-size: 13px; padding: 5px 11px; }
+/* 二级分类、场景：单行横向滚动，窄屏不占太多高度 */
+.chips.scroll { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.chips.scroll::-webkit-scrollbar { display: none; }
+.chips.scroll .chip { flex: none; }
+.picker-count { display: flex; align-items: center; gap: 10px; margin: 0; min-height: 28px; }
+.picker-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+.picker-grid .tile[aria-pressed="true"] { border-color: var(--azul); box-shadow: 0 0 0 2px var(--azul); }

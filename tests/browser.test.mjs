@@ -135,8 +135,9 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
     { categoryId: 'bottom', subcategoryId: 'bottom.jeans', seasons: ['春', '秋', '冬'], scenes: [], hasAlpha: false, type: 'image/jpeg' },
     { categoryId: 'top', subcategoryId: 'top.sport_tee', seasons: ['夏', '秋'], scenes: [], hasAlpha: true, type: 'image/webp' },
   ]);
-  const groups = await chrome.evaluate(`[...document.querySelectorAll('#closet h2')].map((h) => h.textContent)`);
-  assert.deepEqual(groups, ['上衣 · 1', '裤子 · 1']);
+  // 左边栏件数：全部 2、上衣 1、裤子 1
+  const counts = await chrome.evaluate(`Object.fromEntries([...document.querySelectorAll('#closet .side-item')].map((b) => [b.dataset.id || 'all', b.querySelector('.side-count').textContent]))`);
+  assert.deepEqual([counts.all, counts.top, counts.bottom, counts.skirt], ['2', '1', '1', '0']);
   assert.deepEqual(await chrome.evaluate(`[...document.querySelectorAll('#closet .tile span')].map((s) => s.textContent)`), ['运动短袖', '牛仔裤']);
 
   // 编辑：改颜色；归档后衣橱只剩 1 件，已归档区可见
@@ -152,7 +153,8 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
   assert.equal(await chrome.evaluate(`document.querySelectorAll('#editForm input')[1].value`), '藏青');
   await chrome.evaluate(`[...document.querySelectorAll('#editForm button')].find((b) => b.textContent === '归档').click()`);
   await chrome.waitFor(`document.querySelectorAll('#closet .tile').length === 1`);
-  await chrome.evaluate(`document.getElementById('showArchived').click()`);
+  assert.equal(await chrome.evaluate(`document.getElementById('archivedBtn').textContent`), '已归档（1 件） ▾');
+  await chrome.evaluate(`document.getElementById('archivedBtn').click()`);
   await chrome.waitFor(`document.querySelectorAll('#archived .tile').length === 1`);
 
   // 存储状态和 WebP 检测已显示
@@ -178,6 +180,68 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
     .map((f) => fetch('vendor/transformers-4.3.1/' + f).then(async (r) => r.ok && (await r.arrayBuffer()).byteLength)))`);
   assert.deepEqual(vendor, [586230, 53057, 26861777]);
   await chrome.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+});
+
+// 衣橱筛选：存 6 件（1 件已归档），通过界面点选，网格数量和 URL hash 对得上；刷新后筛选还在
+const SEED_CLOSET = `(async () => {
+  const { openStore } = await import('/store.js');
+  const s = await openStore();
+  const c = new OffscreenCanvas(40, 40); c.getContext('2d').fillRect(5, 5, 20, 20);
+  const image = await c.convertToBlob({ type: 'image/png' });
+  const add = (categoryId, subcategoryId, seasons, scenes) => s.add({ image, hasAlpha: true, categoryId, subcategoryId, seasons, scenes });
+  await add('top', 'top.shirt', ['春', '秋'], ['通勤']);
+  await add('top', 'top.casual_tee', ['夏'], ['休闲']);
+  await add('top', 'top.heavy_sweater', ['冬'], ['通勤', '休闲']);
+  await add('top', 'top.casual_tee', ['春', '夏'], ['运动']);
+  await add('bottom', 'bottom.jeans', ['春', '秋', '冬'], ['休闲']);
+  await s.archive((await add('top', 'top.casual_tee', ['夏'], ['休闲'])).id);
+  s.close();
+})()`;
+const tiles = `document.querySelectorAll('#closet .tile').length`;
+const clickIn = (row, text) => `[...document.querySelectorAll('#closet .chips[data-name="${row}"] .chip')].find((b) => b.textContent === '${text}').click()`;
+const clickSide = (id) => `document.querySelector('#closet .side-item[data-id="${id}"]').click()`;
+
+test('衣橱筛选：左边栏、二级分类、季节多选后网格数量正确；件数不计已归档；刷新后筛选保留', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.evaluate(SEED_CLOSET);
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  assert.equal(await chrome.evaluate(tiles), 5);
+  // 件数：上衣 4（不计已归档），件数 0 的裙子灰色；"全部"时没有二级分类行
+  assert.equal(await chrome.evaluate(`document.querySelector('.side-item[data-id="top"] .side-count').textContent`), '4');
+  assert.equal(await chrome.evaluate(`document.querySelector('.side-item[data-id="skirt"]').classList.contains('none')`), true);
+  assert.equal(await chrome.evaluate(`document.querySelector('#closet .chips[data-name="sub"]')`), null);
+
+  await chrome.evaluate(clickSide('top'));
+  assert.equal(await chrome.evaluate(tiles), 4);
+  assert.equal(await chrome.evaluate(`document.querySelector('.picker-count span').textContent`), '共 4 件');
+  await chrome.evaluate(clickIn('sub', '休闲短袖'));
+  assert.equal(await chrome.evaluate(tiles), 2);
+  // 季节多选：同组"或"
+  await chrome.evaluate(clickIn('sub', '全部'));
+  await chrome.evaluate(clickIn('seasons', '夏'));
+  await chrome.evaluate(clickIn('seasons', '冬'));
+  assert.equal(await chrome.evaluate(tiles), 3);
+  // 加场景：组间"且"
+  await chrome.evaluate(clickIn('scenes', '通勤'));
+  assert.equal(await chrome.evaluate(tiles), 1);
+  assert.equal(await chrome.evaluate('decodeURIComponent(location.hash)'), '#c=top&season=夏,冬&scene=通勤');
+
+  // 刷新（抠图队列自动刷新也是 location.reload）后筛选和网格不变
+  await chrome.reload();
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  assert.equal(await chrome.evaluate(tiles), 1);
+  const pressed = await chrome.evaluate(`[...document.querySelectorAll('#closet [aria-pressed="true"]')].map((b) => b.dataset.id ?? b.textContent)`);
+  assert.deepEqual(pressed, ['top', '全部', '夏', '冬', '通勤']);
+
+  // 清除筛选：保留一级分类
+  await chrome.evaluate(`[...document.querySelectorAll('#closet button')].find((b) => b.textContent === '清除筛选').click()`);
+  assert.equal(await chrome.evaluate(tiles), 4);
+  assert.equal(await chrome.evaluate('location.hash'), '#c=top');
+  await chrome.evaluate(clickSide(''));
+  assert.equal(await chrome.evaluate(tiles), 5);
+  assert.equal(await chrome.evaluate('location.hash'), '');
 });
 
 // 页面里读队列和任务状态

@@ -133,6 +133,14 @@
 - 导出：手机（`pointer: coarse` 且支持 `navigator.canShare({ files })`）用分享菜单（iPhone"存储到文件"），其他用下载。分享报 NotAllowedError（生成 ZIP 太久，不再算用户点击）时显示"保存备份文件"按钮让用户再点一次。分享成功或已下载才记录备份时间（`meta.backup`，本机，不导出）。
 - 页头"上次备份：今天 / N 天前 / 还没有备份"；超过 7 天、或有衣物却从未备份时用提醒色 `--warn`。处理照片时隐藏备份卡片。
 
+### 阶段 4a 衣橱布局（2026-10-15）
+- `picker.js` 衣物选择器，衣橱用 browse 模式，4b 选衣服用 single 模式。`createPicker(container, { filter, initialCategory, canSwitchCategory, mode, selectedId, onFilterChange, onSelect })`，`setData(items, visibleTaxonomy(rows))` 刷新。
+- 筛选纯函数 `filterItems`（排除已归档；一级、二级、季节、场景组间"且"，季节、场景组内"或"；没填季节的衣物在选了季节时不显示）、`countByCategory`（左边栏件数，不计已归档，不受季节/场景筛选影响）。
+- 衣橱筛选存 URL hash（`#c=top&sub=top.shirt&season=春,夏&scene=通勤`，`history.replaceState`），`location.reload()` 后保留。解析时丢掉不存在或已隐藏的分类。4b 的选择器不写 hash。
+- 一级分类图标是 `taxonomy.js` 的 `icon`（emoji），自建一级用 `CUSTOM_ICON`。
+- 已归档不进网格，衣橱下方"已归档（N 件）"按钮展开。
+- 布局截图：`node tools/shots.mjs <输出目录>`（390 px 和 1280 px）。
+
 ### 配色（2026-10-11）
 - 阿根廷蓝白：`style.css` 顶部的变量。天蓝 `#74acdf` 用于国旗条和选中状态（配墨蓝字）；深蓝 `#1f5a8e` 用于操作按钮（白字）；金色 `#f6b40e` 只用在页头的五月太阳。页头是简化国旗（上下天蓝条 + 白底）。
 - 图标是白色衣架 + 天蓝底。iPhone 主屏幕图标要删掉后重新"添加到主屏幕"才会更新。
@@ -148,11 +156,11 @@
 | 标签向量 | `label-embeddings.json`（根目录，应用用） | – | `node tools/embed.mjs` 用 fashionSigLIP fp32 文本模型生成，内容来自 `taxonomy.js`。改了英文 prompt 必须重新生成，测试会检查。`spike/label-embeddings.json` 只给 spike 用 |
 
 ## 目录
-- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`backup.js` 备份 ZIP、`check.html` 网络检查、`sw.js`、`manifest.webmanifest`、`icons/`）。
+- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`backup.js` 备份 ZIP、`picker.js` 衣物选择器、`check.html` 网络检查、`sw.js`、`manifest.webmanifest`、`icons/`）。
 - `vendor/`：第三方库（transformers.js、ONNX Runtime），见 `vendor/README.md`。
 - `docs/HISTORY.md`：PROGRESS.md 移出的旧记录。
 - `tests/`：`node --test tests/*.test.mjs`。`store.test.mjs` 测纯函数；`browser.test.mjs` 用 headless Chrome（CDP，`tests/cdp.mjs`，无依赖）测真实 IndexedDB、录入流程、抠图队列（假模型）和离线打开。模拟崩溃用"处理中直接重新打开页面"，不用 CDP `Page.crash`（装了 Service Worker 后崩溃后的导航不返回）。需要本机装有 Chrome。
-- `tools/`：Mac 上运行的脚本。`embed.mjs` 生成标签向量；`eval.mjs` 用 `private/samples` + `private/labels.json` 算分类准确率。都用 headless Chrome（`tests/cdp.mjs`），不加依赖。
+- `tools/`：Mac 上运行的脚本。`embed.mjs` 生成标签向量；`eval.mjs` 用 `private/samples` + `private/labels.json` 算分类准确率；`shots.mjs` 布局截图。都用 headless Chrome（`tests/cdp.mjs`），不加依赖。
 - `spike/`：阶段 0 验证页（`index.html` 单文件）和预计算的标签向量 `label-embeddings.json`。
 - `private/`：本地测试照片等，不提交（`private/samples/` 放样本照片）。
 

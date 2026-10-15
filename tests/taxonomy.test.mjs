@@ -56,6 +56,8 @@ test('visibleTaxonomy：内置 + 自建 − 隐藏，改名只改显示名', () 
   assert.equal(top.subs.find((s) => s.id === 'top.shirt').zh, '衬衣');
   assert.equal(top.subs.at(-1).id, 'u1');
   assert.equal(v.at(-1).zh, '泳衣');
+  assert.equal(top.icon, '👕');
+  assert.equal(v.at(-1).icon, '🏷️'); // 自建一级分类用默认图标
   assert.equal(labelOf('top.shirt', rows), '衬衣');
   assert.equal(labelOf('top.shirt'), '衬衫');
 });

@@ -1,5 +1,6 @@
 import { SEASONS, SCENES } from './options.js';
-import { CATEGORIES, getNode, split, seasonsFor, labelOf } from './taxonomy.js';
+import { CATEGORIES, getNode, split, seasonsFor, labelOf, visibleTaxonomy } from './taxonomy.js';
+import { createPicker, parseFilter, filterToHash } from './picker.js';
 import { openStore, groupByCategory } from './store.js';
 import { prepareImage, probeWebpAlpha, makeThumb } from './image.js';
 import { THUMB_SIDE, RESULTS_DELAY_MS } from './config.js';
@@ -121,21 +122,35 @@ function renderGroups(container, items) {
       el('div', { className: 'grid' }, ...g.items.map(tile)))));
 }
 
+// 衣橱用衣物选择器（picker.js）；筛选条件存在 URL hash，抠图队列自动刷新后仍在
+let picker = null;
+let showArchived = false;
 async function render() {
   for (const u of urls) URL.revokeObjectURL(u);
   urls.clear();
-  const all = await store.list({ includeArchived: true });
+  const [all, rows] = await Promise.all([store.list({ includeArchived: true }), store.listCategoryRows()]);
+  const taxonomy = visibleTaxonomy(rows);
   showStorage(all);
   showBackupAge(all.length);
   const active = all.filter((i) => !i.archived);
-  renderGroups($('closet'), active);
+  picker ??= createPicker($('closet'), {
+    filter: parseFilter(location.hash, taxonomy),
+    onFilterChange: (f) => history.replaceState(null, '', location.pathname + location.search + filterToHash(f)),
+    onSelect: openEdit,
+  });
+  picker.setData(all, taxonomy);
+  $('closet').hidden = !active.length;
   $('empty').hidden = active.length > 0;
-  const showArchived = $('showArchived').checked;
-  $('archived').hidden = !showArchived;
-  if (showArchived) renderGroups($('archived'), all.filter((i) => i.archived));
+  const archived = all.filter((i) => i.archived);
+  const btn = $('archivedBtn');
+  btn.hidden = !archived.length;
+  btn.textContent = `已归档（${archived.length} 件）${showArchived ? ' ▴' : ' ▾'}`;
+  btn.setAttribute('aria-expanded', String(showArchived && archived.length > 0));
+  $('archived').hidden = !(showArchived && archived.length);
+  if (!$('archived').hidden) renderGroups($('archived'), archived);
   else $('archived').replaceChildren();
 }
-$('showArchived').addEventListener('change', render);
+$('archivedBtn').addEventListener('click', () => { showArchived = !showArchived; render(); });
 
 // ---------- 编辑 ----------
 function openEdit(item) {
