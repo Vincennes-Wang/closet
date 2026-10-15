@@ -10,7 +10,7 @@ const arg = process.argv[2];
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
 if (arg === '--serve') {
-  const server = await startServer();
+  const server = await startServer(undefined, 51587);
   console.log(`1. Safari 打开 ${server.origin}/tests/seed.html?items=40&outfits=20，等显示"完成"`);
   console.log(`2. 打开 ${server.origin}/ ，滚到底再回顶部，等 3 秒；在"活动监视器" → 内存里找 Safari 这个网址的网页进程，记下"内存"`);
   console.log(`3. 打开 ${server.origin}/#v=outfits ，同样操作再记一次`);

@@ -12,7 +12,8 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/ja
   '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.png': 'image/png', '.wasm': 'application/wasm' };
 
 // root：要服务的目录（默认本仓库；tools/memory.mjs 用它服务旧版本做对照）
-export async function startServer(root = ROOT) {
+// port：0 = 随机；tools/memory.mjs --serve 用固定端口，Safari 里准备好的数据（按网址存）下次还能用
+export async function startServer(root = ROOT, port = 0) {
   const server = createServer(async (req, res) => {
     let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     if (path.endsWith('/')) path += 'index.html';
@@ -24,7 +25,7 @@ export async function startServer(root = ROOT) {
       res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' }).end(body);
     } catch { res.writeHead(404).end(); }
   });
-  await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+  await new Promise((ok) => server.listen(port, '127.0.0.1', ok));
   return { origin: `http://127.0.0.1:${server.address().port}`, close: () => server.close() };
 }
 
