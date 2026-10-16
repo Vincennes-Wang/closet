@@ -1,5 +1,5 @@
 // 搭配：槽位规则和校验（纯函数，node 可测）。存储在 store.js（outfits 表），界面在 app.js。
-// 每个槽位放 1 件衣物（存衣物 id）。连衣裙 / 套装填了，上衣和下装可空；没填时必填。鞋必填。
+// 每个槽位放 1 件衣物（存衣物 id）。连衣裙 / 套装填了，上衣和下装可空；没填时必填。其余槽位都可空。
 // 衣物删除或归档后，搭配里保留它的 id，界面显示"已删除"/"已归档"，保存前要求重新选择。
 import { SCENES } from './options.js';
 
@@ -9,7 +9,7 @@ export const SLOTS = [
   { id: 'top', zh: '上衣', accepts: [['top']] },
   { id: 'onepiece', zh: '连衣裙 / 套装', optional: true, accepts: [['skirt', 'skirt.dress'], ['set']] },
   { id: 'bottom', zh: '下装', accepts: [['bottom'], ['skirt', 'skirt.skirt']] },
-  { id: 'shoes', zh: '鞋', accepts: [['shoes']] },
+  { id: 'shoes', zh: '鞋', optional: true, accepts: [['shoes']] }, // 2026-10-16 用户改为选填
   { id: 'bag', zh: '包', optional: true, accepts: [['bag']] },
   { id: 'accessory', zh: '配饰', optional: true, accepts: [['accessory'], ['hat']] },
 ];

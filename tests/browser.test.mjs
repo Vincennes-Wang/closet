@@ -789,7 +789,7 @@ const pickSlot = (slot, name) => `(async () => {
 const outfitCards = `[...document.querySelectorAll('#outfitList .outfit-card')].map((c) => ({ name: c.querySelector('.outfit-name').textContent, meta: c.querySelector('.muted').textContent, missing: [...c.querySelectorAll('.slot-missing')].map((m) => m.textContent) }))`;
 const storeCall = (expr) => `(async () => { const { openStore } = await import('/store.js'); const s = await openStore(); try { return await (${expr}); } finally { s.close(); } })()`;
 
-test('搭配：界面新建（上衣 + 下装 + 鞋；连衣裙 + 鞋），缺鞋时提示，刷新后还在；归档 / 删除在搭配里的衣物先提示，搭配显示"已归档"/"已删除"', async () => {
+test('搭配：界面新建（上衣 + 下装 + 鞋；连衣裙 + 鞋），缺下装时提示，刷新后还在；归档 / 删除在搭配里的衣物先提示，搭配显示"已归档"/"已删除"', async () => {
   await resetDb();
   await chrome.goto(`${server.origin}/tests/blank.html`);
   const ids = await chrome.evaluate(SEED_OUTFIT);
@@ -803,9 +803,9 @@ test('搭配：界面新建（上衣 + 下装 + 鞋；连衣裙 + 鞋），缺�
   await chrome.evaluate(`document.querySelector('#editForm input').value = '周一通勤'`);
   await chrome.evaluate(clickText('#editForm .chips', '通勤'));
   assert.equal(await chrome.evaluate(pickSlot('top', '衬衫')), 1);
-  assert.equal(await chrome.evaluate(pickSlot('bottom', '牛仔裤')), 1);
   await chrome.evaluate(clickText('#editForm', '保存'));
-  assert.equal(await chrome.evaluate(`document.querySelector('#editForm p.error').textContent`), '请选择鞋');
+  assert.equal(await chrome.evaluate(`document.querySelector('#editForm p.error').textContent`), '请选择下装');
+  assert.equal(await chrome.evaluate(pickSlot('bottom', '牛仔裤')), 1);
   assert.equal(await chrome.evaluate(pickSlot('shoes', '运动鞋')), 1);
   // 选择器切回编辑视图后，名称和场景还在
   assert.equal(await chrome.evaluate(`document.querySelector('#editForm input').value`), '周一通勤');

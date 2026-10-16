@@ -14,17 +14,22 @@ export const CATEGORIES = [
     { id: 'top.shirt', zh: '衬衫', en: 'a dress shirt or blouse with buttons all the way down the front', seasons: SPRING_AUTUMN },
     { id: 'top.light_sweater', zh: '薄毛衣', en: 'a thin lightweight knit pullover sweater', seasons: SPRING_AUTUMN },
     { id: 'top.heavy_sweater', zh: '厚毛衣', en: 'a thick chunky wool pullover sweater', seasons: ['冬'] },
+    // 卫衣（用户 2026-10-16 加）：只算套头款（连帽或圆领，没有拉链）。拉链连帽抓绒衫用户定为"运动服"（样本 IMG_4025、4026），
+    // 所以 prompt 强调"套头、无拉链"，运动服的 prompt 写明含拉链连帽款
+    { id: 'top.hoodie', zh: '卫衣', en: 'a pullover hoodie or crewneck sweatshirt with no zipper, pulled on over the head', seasons: SPRING_AUTUMN },
     // 外搭：叠穿在外面的针织开衫、罩衫。prompt 强调"针织、开襟、叠穿"，和外套里的夹克、风衣区分
     { id: 'top.cardigan_layer', zh: '外搭', en: 'an open-front knit cardigan or light cover-up worn over a top', seasons: SPRING_AUTUMN },
   ] },
   { id: 'outer', icon: '🧥', zh: '外套', subs: [
     { id: 'outer.trench_coat', zh: '风衣', en: 'a long belted trench coat', seasons: SPRING_AUTUMN },
-    { id: 'outer.track_jacket', zh: '运动服', en: 'a zip-up athletic track jacket', seasons: SPRING_AUTUMN },
+    { id: 'outer.track_jacket', zh: '运动服', en: 'a full-zip athletic track jacket or zip-up hooded sweatshirt jacket', seasons: SPRING_AUTUMN },
     { id: 'outer.wool_coat', zh: '呢子大衣', en: 'a long wool overcoat', seasons: ['冬'] },
     { id: 'outer.jacket', zh: '夹克', en: 'a short outerwear jacket such as a bomber, denim or leather jacket', seasons: SPRING_AUTUMN },
   ] },
   { id: 'bottom', icon: '👖', zh: '裤子', subs: [
-    { id: 'bottom.shorts', zh: '短裤', en: 'a pair of shorts', seasons: ['夏'] },
+    // 短裤分两类（用户 2026-10-16）：原"短裤"的 id 保留给休闲短裤，已录入的衣物不用迁移
+    { id: 'bottom.shorts', zh: '休闲短裤', en: 'a pair of casual shorts such as chino or denim shorts', seasons: ['夏'] },
+    { id: 'bottom.sport_shorts', zh: '运动短裤', en: 'a pair of athletic running shorts made of lightweight technical fabric', seasons: ['夏'] },
     { id: 'bottom.jeans', zh: '牛仔裤', en: 'a pair of denim jeans', seasons: ['春', '秋', '冬'] },
     { id: 'bottom.casual', zh: '休闲裤', en: 'a pair of casual chino trousers', seasons: SPRING_AUTUMN },
     { id: 'bottom.dress_pants', zh: '西裤', en: 'a pair of tailored suit trousers', seasons: SPRING_AUTUMN },

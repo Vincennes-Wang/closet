@@ -34,17 +34,18 @@ test('选择器分类：下装只有裤子和裙子（裙子下只有半身裙�
   const t = taxonomyForSlot(getSlot('bottom'), visibleTaxonomy());
   assert.deepEqual(t.map((c) => c.id), ['bottom', 'skirt']);
   assert.deepEqual(t[1].subs.map((s) => s.id), ['skirt.skirt']);
-  assert.equal(t[0].subs.length, 6);
+  assert.equal(t[0].subs.length, 7);
 });
 
-test('必填：上衣 + 下装 + 鞋；有连衣裙 / 套装时上衣和下装可空', () => {
+test('必填：上衣 + 下装（鞋等其余槽位可空）；有连衣裙 / 套装时上衣和下装可空', () => {
   assert.equal(outfitError(outfit({ top: 'shirt', bottom: 'jeans', shoes: 'shoes' }), byId), null);
   assert.equal(outfitError(outfit({ top: 'shirt', shoes: 'shoes' }), byId), '请选择下装');
   assert.equal(outfitError(outfit({ bottom: 'jeans', shoes: 'shoes' }), byId), '请选择上衣');
-  assert.equal(outfitError(outfit({ top: 'shirt', bottom: 'jeans' }), byId), '请选择鞋');
+  assert.equal(outfitError(outfit({ top: 'shirt', bottom: 'jeans' }), byId), null); // 鞋选填（2026-10-16）
   assert.equal(outfitError(outfit({ onepiece: 'dress', shoes: 'shoes' }), byId), null);
   assert.equal(outfitError(outfit({ onepiece: 'set', shoes: 'shoes', outer: 'coat', bag: 'bag', accessory: 'hat' }), byId), null);
-  assert.equal(outfitError(outfit({ onepiece: 'dress' }), byId), '请选择鞋');
+  assert.equal(outfitError(outfit({ onepiece: 'dress' }), byId), null);
+  assert.equal(outfitError(outfit({ shoes: 'shoes' }), byId), '请选择上衣');
 });
 
 test('已删除 / 已归档的衣物：报错，要求重新选择', () => {

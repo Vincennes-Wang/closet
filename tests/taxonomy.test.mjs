@@ -16,7 +16,7 @@ test('id 唯一，二级 id 以一级 id 开头，季节取值合法', () => {
 
 test('打分项：全部内置二级 + 没有二级的一级；每项都有英文 prompt', () => {
   const l = leaves();
-  assert.equal(l.length, 30);
+  assert.equal(l.length, 32); // 2026-10-16 加卫衣、运动短裤
   assert.ok(l.every((x) => x.en));
   assert.deepEqual(l.filter((x) => !x.subcategoryId).map((x) => x.id), ['set', 'bag', 'accessory', 'hat']);
   assert.deepEqual(split('top.cardigan_layer'), { categoryId: 'top', subcategoryId: 'top.cardigan_layer' });
@@ -31,6 +31,13 @@ test('季节规则按用户给的表', () => {
   assert.deepEqual(seasonsFor('outer', 'outer.wool_coat'), ['冬']);
   assert.deepEqual(seasonsFor('skirt', 'skirt.dress'), ['春', '夏', '秋']);
   assert.deepEqual(seasonsFor('shoes', 'shoes.sandals'), ['夏']);
+  // 2026-10-16：卫衣；短裤拆成休闲短裤（沿用 bottom.shorts）和运动短裤
+  assert.deepEqual(seasonsFor('top', 'top.hoodie'), ['春', '秋']);
+  assert.deepEqual(seasonsFor('bottom', 'bottom.shorts'), ['夏']);
+  assert.deepEqual(seasonsFor('bottom', 'bottom.sport_shorts'), ['夏']);
+  assert.equal(labelOf('bottom.shorts'), '休闲短裤');
+  assert.equal(labelOf('bottom.sport_shorts'), '运动短裤');
+  assert.equal(labelOf('top.hoodie'), '卫衣');
 });
 
 test('isValidPair：有二级的必须选它下面的二级，没有二级的必须为 null', () => {
