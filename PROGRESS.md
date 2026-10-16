@@ -1,19 +1,17 @@
 # PROGRESS
 - 状态：进行中
-- 当前阶段：4b 搭配已上线并在 iPhone 验收；下一步 4c 分类管理界面
-- 累计用时：约 17.5（用户报）（工作 23 次）
+- 当前阶段：4c 前的分类和槽位小改已上线；下一步 4c 分类管理界面
+- 累计用时：约 18（用户报）（工作 24 次）
 - 线上地址：https://vincennes-wang.github.io/closet/（应用）、https://vincennes-wang.github.io/closet/check.html（网络检查）、https://vincennes-wang.github.io/closet-models/（模型）
 
-## 最近一次工作（2026-10-15，阶段 4b 搭配）
+## 最近一次工作（2026-10-16，4c 前的小改）
 - 完成：
-  - 4a iPhone 验收通过（用户确认）。
-  - 4b：7 行槽位搭配（连衣裙 / 套装单独一行，帽子归配饰）、场景、季节推算；数据库 v4（新建 outfits、plans、thumbs，保留 v3 数据）；VersionError / 被挡住时的提示；"关于"区显示版本；缩略图按需加载；备份 formatVersion 2（v1 仍可导入）；归档 / 删除在搭配里的衣物先提示；`closet-v23`。
-  - 用户上线前已导出备份；上线后主屏幕图标和 Safari 都显示 closet-v23，数据还在，iPhone 新建搭配刷新后还在。
+  - 上衣加"卫衣"`top.hoodie`（春秋，只算套头款）；裤子"短裤"拆成"休闲短裤"（沿用 `bottom.shorts`，已录入的不迁移）和"运动短裤"`bottom.sport_shorts`（都是夏）。
+  - 用户决定：拉链连帽抓绒衫算"运动服"。运动服 prompt 改为含拉链连帽款，卫衣 prompt 强调套头、无拉链。重新生成 `label-embeddings.json`。
+  - 搭配里鞋改为选填（只剩：没有连衣裙 / 套装时上衣和下装必填）。`closet-v24`，线上已确认。
 - 验证结果：
-  - `node --test tests/*.test.mjs` 61/61（新增迁移固件测试、从 0 建库、VersionError、搭配流程、缩略图、备份 v2 / v1）。
-  - 故意去掉"有连衣裙时上衣、下装可空"：单元和浏览器各 1 个测试失败，恢复后通过。
-  - 图片解码大小（Chrome，40 件 1024 图）：衣橱 160 MB → 2.5–4.5 MB；20 套搭配页 7.5–13.8 MB。Mac Safari 标签页内存（用户在活动监视器测）：衣橱 97.2 MB，搭配页 97.5 MB。
-  - 截图 390 / 1280 px 检查通过。
+  - `node --test tests/*.test.mjs` 61/61。
+  - `node tools/eval.mjs`（22 张样本）：第一版卫衣 prompt 把 2 张拉链连帽衫判成卫衣，top-1 降到 18/22；改 prompt 后 top-1 20/22（91%）、top-3 22/22（100%，上次 21/22）。样本里没有卫衣和短裤，这两类的效果还没验证。
 
 ## 下次从这里继续
 1. 4c 分类管理界面开始前用 Plan mode 给计划（规则见 CLAUDE.md「分类规则」；自建一级分类放不放进搭配槽位要决定）。
