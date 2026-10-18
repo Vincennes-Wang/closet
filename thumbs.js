@@ -61,10 +61,8 @@ export function createImageLoader(store) {
     return bbox;
   }
 
-  // 把搭配画到 ctx（宽 W、高 H）。已删除、已归档的不画。返回画了几件
-  async function drawOutfit(ctx, W, H, outfit, itemsById) {
-    ctx.fillStyle = BG;
-    ctx.fillRect(0, 0, W, H);
+  // 解码搭配里各件的缩略图、取轮廓（已删除、已归档的不画）。用完要 closeParts 释放
+  async function loadParts(outfit, itemsById) {
     const parts = [];
     for (const s of SLOTS) {
       const id = outfit.slots[s.id];
@@ -75,10 +73,23 @@ export function createImageLoader(store) {
       const sw = (bb.x1 - bb.x0) * bmp.width, sh = (bb.y1 - bb.y0) * bmp.height;
       parts.push({ slot: s.id, item, bmp, bb, sw, sh, aspect: sw / sh });
     }
+    return parts;
+  }
+  const closeParts = (parts) => { for (const p of parts) p.bmp.close(); };
+
+  // 各件的位置（手动优先，其余自动），带宽高比：{ 槽位: { x, y, w, rotation, z, aspect } }
+  const placedOf = (outfit, parts) => {
     const layout = resolveLayout(outfit, Object.fromEntries(parts.map((p) => [p.slot, p.aspect])));
-    parts.sort((a, b) => layout[a.slot].z - layout[b.slot].z);
-    for (const p of parts) {
-      const l = layout[p.slot];
+    return Object.fromEntries(parts.map((p) => [p.slot, { ...layout[p.slot], aspect: p.aspect }]));
+  };
+
+  // 同步画（拖动时每帧调用）。selected：选中槽位画虚线框
+  function paint(ctx, W, H, outfit, parts, selected = null) {
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+    const placed = placedOf(outfit, parts);
+    for (const p of [...parts].sort((a, b) => placed[a.slot].z - placed[b.slot].z)) {
+      const l = placed[p.slot];
       const w = l.w * W, h = w / p.aspect;
       ctx.save();
       ctx.translate(l.x * W, l.y * H);
@@ -87,9 +98,22 @@ export function createImageLoader(store) {
       if (!p.item.hasAlpha) { ctx.beginPath(); ctx.roundRect(-w / 2, -h / 2, w, h, Math.min(w, h) * 0.08); ctx.clip(); }
       ctx.drawImage(p.bmp, p.bb.x0 * p.bmp.width, p.bb.y0 * p.bmp.height, p.sw, p.sh, -w / 2, -h / 2, w, h);
       ctx.restore();
-      p.bmp.close();
+      if (p.slot === selected) {
+        ctx.save();
+        ctx.translate(l.x * W, l.y * H);
+        if (l.rotation) ctx.rotate((l.rotation * Math.PI) / 180);
+        ctx.setLineDash([6, 4]); ctx.lineWidth = 2; ctx.strokeStyle = '#1f5a8e';
+        ctx.strokeRect(-w / 2 - 3, -h / 2 - 3, w + 6, h + 6);
+        ctx.restore();
+      }
     }
-    return parts.length;
+    return placed;
+  }
+
+  // 一次性画完（合成图用）。返回画了几件
+  async function drawOutfit(ctx, W, H, outfit, itemsById) {
+    const parts = await loadParts(outfit, itemsById);
+    try { paint(ctx, W, H, outfit, parts); return parts.length; } finally { closeParts(parts); }
   }
 
   // 合成图：sig 对得上就用缓存，否则重新画并保存
@@ -138,14 +162,18 @@ export function createImageLoader(store) {
     observe(img, item) { watch(img, () => thumbFor(item).catch(() => item.image)); },
     // 给 img 绑定搭配，进入视口时加载合成图
     observeOutfit(img, outfit, itemsById) { watch(img, () => compositeFor(outfit, itemsById)); },
-    // 编辑弹窗的实时预览：直接画到 canvas，不写缓存
-    async preview(canvas, outfit, itemsById) {
+    // 编辑弹窗的预览和手动调整（4e）：各件缩略图只解码一次，之后 redraw 同步重画（拖动不卡）。不写缓存。
+    // 返回 { count, placed(outfit), redraw(outfit, selected), close() }；换槽位后要 close 再重新创建
+    async editor(canvas, outfit, itemsById) {
       const dpr = Math.min(globalThis.devicePixelRatio || 1, 2);
       const W = canvas.clientWidth || 240, H = Math.round((W * OUTFIT_H) / OUTFIT_W);
       canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
       const ctx = canvas.getContext('2d');
       ctx.scale(dpr, dpr);
-      return drawOutfit(ctx, W, H, outfit, itemsById);
+      let parts = await loadParts(outfit, itemsById);
+      const redraw = (o, selected = null) => (parts ? paint(ctx, W, H, o, parts, selected) : {});
+      redraw(outfit);
+      return { count: parts.length, placed: (o) => (parts ? placedOf(o, parts) : {}), redraw, close() { if (parts) closeParts(parts); parts = null; } };
     },
     // 重新渲染后调用：已不在页面上的图片停止观察并释放
     sweep() {

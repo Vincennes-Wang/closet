@@ -4,6 +4,7 @@ import { createPicker, parseFilter, filterParams } from './picker.js';
 import { openStore, groupByCategory } from './store.js';
 import { SLOTS, getSlot, itemsForSlot, taxonomyForSlot, slotState, outfitError, outfitSeasons, outfitsUsing, emptySlots } from './outfit.js';
 import { createImageLoader } from './thumbs.js';
+import { hitTest, moveBy, setSize, setRotation, shiftLayer, resetSlot } from './layout.js';
 import { prepareImage, probeWebpAlpha, makeThumb } from './image.js';
 import { THUMB_SIDE, RESULTS_DELAY_MS } from './config.js';
 import { buildBackup, parseBackup } from './backup.js';
@@ -282,11 +283,84 @@ async function openOutfit(saved) {
   const [all, rows] = await Promise.all([store.list({ includeArchived: true }), store.listCategoryRows()]);
   const byId = new Map(all.map((i) => [i.id, i]));
   const taxonomy = visibleTaxonomy(rows);
-  const draft = saved ? { ...saved, slots: { ...saved.slots } } : { name: '', scenes: [], slots: emptySlots() };
+  const draft = saved ? { ...saved, slots: { ...saved.slots }, layout: saved.layout ? structuredClone(saved.layout) : undefined }
+    : { name: '', scenes: [], slots: emptySlots() };
   const name = el('input', { type: 'text', value: draft.name, placeholder: '可不填，如 周一通勤' });
   const scenes = chips('scenes', SCENES, draft.scenes, true);
   const msg = el('p', { className: 'error' });
-  const close = () => { dialog.close(); images.sweep(); };
+  // 手动调整排版（4e）：adjusting = 调整模式；selected = 选中的槽位；session = 预览（缩略图只解码一次）
+  let adjusting = false, selected = null, session = null;
+  const endSession = () => { session?.close(); session = null; };
+  const close = () => { endSession(); dialog.close(); images.sweep(); };
+  // 换了槽位里的衣物或清空：这个槽位恢复自动排版（新衣物宽高比不同）
+  const setSlot = (slotId, itemId) => {
+    draft.slots[slotId] = itemId;
+    draft.layout = resetSlot(draft.layout, slotId);
+    if (selected === slotId) selected = null;
+  };
+
+  // 调整模式的工具栏：大小、角度滑块，层次、恢复自动按钮
+  function adjustPanel(canvas) {
+    const size = el('input', { type: 'range', min: '8', max: '100', step: '1' });
+    const angle = el('input', { type: 'range', min: '-180', max: '180', step: '1' });
+    const btn = (label, fn) => el('button', { type: 'button', className: 'small', textContent: label, onclick: fn });
+    const set = (fn) => { // fn(当前位置) → 新位置，写进 draft.layout 并重画
+      const placed = session?.placed(draft);
+      if (!placed?.[selected]) return;
+      draft.layout = { ...draft.layout, [selected]: fn(placed[selected]) };
+      redraw();
+    };
+    const layer = (dir) => {
+      const placed = session?.placed(draft);
+      if (!placed?.[selected]) return;
+      draft.layout = { ...draft.layout, ...shiftLayer(placed, selected, dir) };
+      redraw();
+    };
+    const fwd = btn('往前一层', () => layer(1)), back = btn('往后一层', () => layer(-1));
+    const reset = btn('这件恢复自动', () => { draft.layout = resetSlot(draft.layout, selected); redraw(); });
+    const resetAll = btn('全部恢复自动', () => { draft.layout = undefined; redraw(); });
+    size.oninput = () => set((p) => setSize(p, Number(size.value) / 100));
+    angle.oninput = () => set((p) => setRotation(p, Number(angle.value)));
+    const hint = el('p', { className: 'muted' });
+    const sync = () => { // 选中项变化后：滑块显示当前值，没选中时禁用
+      const p = selected && session?.placed(draft)[selected];
+      for (const c of [size, angle, fwd, back, reset]) c.disabled = !p;
+      if (p) { size.value = String(Math.round(p.w * 100)); angle.value = String(Math.round(p.rotation)); }
+      hint.textContent = p ? `已选中：${getSlot(selected).zh}。拖动移位，或用下面的滑块` : '点一件衣物选中它，然后拖动移位';
+      canvas.dataset.selected = selected ?? '';
+    };
+    function redraw() { session?.redraw(draft, selected); sync(); }
+    const panel = el('div', { className: 'adjust' }, hint,
+      el('label', { className: 'field' }, el('span', { textContent: '大小' }), size),
+      el('label', { className: 'field' }, el('span', { textContent: '角度' }), angle),
+      el('div', { className: 'actions' }, fwd, back, reset, resetAll));
+    return { panel, redraw, sync };
+  }
+
+  // 画布上的指针：按下选中（点空白取消选中），拖动移位
+  function bindPointer(canvas, ctl) {
+    let drag = null;
+    const at = (e) => { const r = canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }; };
+    canvas.addEventListener('pointerdown', (e) => {
+      if (!adjusting || !session) return;
+      const p = at(e);
+      selected = hitTest(session.placed(draft), p.x, p.y);
+      drag = selected ? p : null;
+      if (drag) canvas.setPointerCapture(e.pointerId);
+      ctl.redraw();
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drag || !selected) return;
+      const p = at(e);
+      const cur = session.placed(draft)[selected];
+      draft.layout = { ...draft.layout, [selected]: moveBy(cur, p.x - drag.x, p.y - drag.y) };
+      drag = p;
+      session.redraw(draft, selected);
+    });
+    const end = () => { if (drag) { drag = null; ctl.sync(); } };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+  }
 
   function editor() {
     const slotRows = SLOTS.map((slot) => {
@@ -299,17 +373,22 @@ async function openOutfit(saved) {
           el('span', { className: 'slot-text' },
             el('strong', { textContent: slot.zh }),
             el('span', { className: state === 'ok' || !state ? 'muted' : 'error', textContent: state === 'ok' ? itemName(byId.get(id)) : STATE_TEXT[state] ?? (hint || '未选') }))),
-        id ? el('button', { type: 'button', className: 'small', textContent: '清空', onclick: () => { draft.slots[slot.id] = null; editor(); } }) : '');
+        id ? el('button', { type: 'button', className: 'small', textContent: '清空', onclick: () => { setSlot(slot.id, null); editor(); } }) : '');
       row.dataset.slot = slot.id;
       return row;
     });
-    // 实时预览：每次改槽位都会重建编辑视图，预览跟着重画（不写缓存）
-    const preview = el('canvas', { className: 'outfit-preview' });
+    // 实时预览：每次改槽位都会重建编辑视图，预览跟着重画（不写缓存）。调整模式下可以拖动、缩放、旋转
+    endSession();
+    const preview = el('canvas', { className: `outfit-preview${adjusting ? ' adjusting' : ''}` });
+    const ctl = adjustPanel(preview);
+    bindPointer(preview, ctl);
+    const toggle = el('button', { type: 'button', className: 'small adjust-toggle', textContent: adjusting ? '完成调整' : '调整排版',
+      onclick: () => { adjusting = !adjusting; if (!adjusting) selected = null; draft.name = name.value; draft.scenes = picked(scenes); editor(); } });
     $('editForm').replaceChildren(
       el('h2', { textContent: saved ? '编辑搭配' : '新建搭配' }),
       el('label', { className: 'field' }, el('span', { textContent: '名称' }), name),
       el('div', { className: 'field' }, el('span', { textContent: '场景' }), scenes),
-      preview,
+      preview, toggle, adjusting ? ctl.panel : '',
       el('div', { className: 'slots' }, ...slotRows),
       msg,
       el('div', { className: 'actions' },
@@ -317,12 +396,18 @@ async function openOutfit(saved) {
         saved ? el('button', { type: 'button', className: 'danger', textContent: '删除搭配', onclick: remove }) : '',
         el('button', { type: 'button', textContent: '取消', onclick: close })));
     images.sweep();
-    images.preview(preview, draft, byId)
-      .then((n) => { preview.dataset.drawn = String(n); })
+    images.editor(preview, draft, byId)
+      .then((sess) => {
+        if (!preview.isConnected) { sess.close(); return; } // 已经又重建了
+        session = sess;
+        ctl.redraw();
+        preview.dataset.drawn = String(sess.count);
+      })
       .catch((err) => console.warn('预览失败', err));
   }
 
   function pickFor(slot) {
+    endSession();
     draft.name = name.value; draft.scenes = picked(scenes);
     const tax = taxonomyForSlot(slot, taxonomy);
     const choices = itemsForSlot(slot, all);
@@ -335,7 +420,7 @@ async function openOutfit(saved) {
     const slotPicker = createPicker(box, {
       initialCategory: tax.length === 1 ? tax[0].id : null, canSwitchCategory: tax.length > 1, mode: 'single',
       selectedId: draft.slots[slot.id], images,
-      onSelect: (item) => { draft.slots[slot.id] = item.id; slotPicker.destroy(); editor(); },
+      onSelect: (item) => { setSlot(slot.id, item.id); slotPicker.destroy(); editor(); },
     });
     slotPicker.setData(choices, tax);
   }
@@ -344,7 +429,8 @@ async function openOutfit(saved) {
     draft.name = name.value.trim(); draft.scenes = picked(scenes);
     const err = outfitError(draft, byId);
     if (err) { msg.textContent = err; return; }
-    try { await store.putOutfit(draft); close(); renderOutfits(); } catch (e) { msg.textContent = e.message; }
+    const { layout, ...rest } = draft; // 没有手动排版时不存 layout 字段
+    try { await store.putOutfit(layout ? { ...rest, layout } : rest); close(); renderOutfits(); } catch (e) { msg.textContent = e.message; }
   }
   async function remove() {
     if (!confirm('删除这套搭配吗？衣物不受影响。')) return;

@@ -67,3 +67,51 @@ export function alphaBBox({ width, height, data }, threshold = 16) {
   if (x1 < 0) return { x0: 0, y0: 0, x1: 1, y1: 1 };
   return { x0: x0 / width, y0: y0 / height, x1: (x1 + 1) / width, y1: (y1 + 1) / height };
 }
+
+// ---------- 手动调整（4e） ----------
+// placed：{ 槽位: { x, y, w, rotation, z, aspect } }（resolveLayout 的结果加上各件宽高比）
+export const MIN_W = 0.08;
+
+// 限制范围：中心点在画板内（衣物至少一半可见），宽 MIN_W–1，角度 −180–180，与 outfit.js validateOutfit 一致
+export function clampPlacement(p) {
+  const c = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  let r = ((p.rotation % 360) + 540) % 360 - 180;
+  if (r === -180 && p.rotation > 0) r = 180;
+  return { x: c(p.x, 0, 1), y: c(p.y, 0, 1), w: c(p.w, MIN_W, 1), rotation: r, z: p.z };
+}
+
+// 点 (x, y)（0–1）落在哪一件上：从最上层往下找，考虑旋转。没有返回 null
+export function hitTest(placed, x, y) {
+  const order = Object.entries(placed).sort(([, a], [, b]) => b.z - a.z);
+  for (const [slot, p] of order) {
+    // 换成同一单位（画板宽 3、高 4），转到衣物自己的坐标系
+    const dx = (x - p.x) * 3, dy = (y - p.y) * 4;
+    const a = (-(p.rotation || 0) * Math.PI) / 180;
+    const lx = dx * Math.cos(a) - dy * Math.sin(a), ly = dx * Math.sin(a) + dy * Math.cos(a);
+    const hw = (p.w * 3) / 2, hh = hw / p.aspect;
+    if (Math.abs(lx) <= hw && Math.abs(ly) <= hh) return slot;
+  }
+  return null;
+}
+
+const pos = ({ x, y, w, rotation, z }) => ({ x, y, w, rotation, z });
+
+export const moveBy = (p, dx, dy) => clampPlacement({ ...pos(p), x: p.x + dx, y: p.y + dy });
+export const setSize = (p, w) => clampPlacement({ ...pos(p), w });
+export const setRotation = (p, rotation) => clampPlacement({ ...pos(p), rotation });
+
+// 往前（dir = 1）或往后（-1）一层：和紧挨着的那件交换 z。返回要写进 layout 的两件 { 槽位: 位置 }；已在最前 / 最后返回 {}
+export function shiftLayer(placed, slot, dir) {
+  const order = Object.keys(placed).sort((a, b) => placed[a].z - placed[b].z);
+  const other = order[order.indexOf(slot) + dir];
+  if (!other) return {};
+  const a = placed[slot], b = placed[other];
+  const za = a.z === b.z ? b.z + dir : b.z;
+  return { [slot]: clampPlacement({ ...pos(a), z: za }), [other]: clampPlacement({ ...pos(b), z: a.z }) };
+}
+
+// 这件恢复自动：从 layout 里去掉；layout 空了返回 undefined（不存这个字段）
+export function resetSlot(layout, slot) {
+  const { [slot]: _, ...rest } = layout ?? {};
+  return Object.keys(rest).length ? rest : undefined;
+}

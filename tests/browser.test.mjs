@@ -1001,3 +1001,94 @@ test('自动排版：编辑弹窗的预览随选择更新', async () => {
   await chrome.evaluate(`document.querySelector('.slot-row[data-slot="bottom"] button.small').click()`);
   await chrome.waitFor(`document.querySelector('#editForm canvas.outfit-preview')?.dataset.drawn === '1'`);
 });
+
+// ---------- 阶段 4e：手动调整排版 ----------
+// 在预览画布上按相对位置（0–1）拖动：CDP 鼠标事件（会产生 pointerdown / move / up）
+async function dragOnPreview(from, to) {
+  const r = await chrome.evaluate(`(() => { const c = document.querySelector('#editForm canvas.outfit-preview'); c.scrollIntoView({ block: 'center' }); const b = c.getBoundingClientRect(); return { x: b.left, y: b.top, w: b.width, h: b.height }; })()`);
+  const pt = ([x, y]) => ({ x: r.x + x * r.w, y: r.y + y * r.h });
+  const a = pt(from), b = pt(to);
+  await chrome.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...a });
+  await chrome.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...a, button: 'left', clickCount: 1 });
+  for (let i = 1; i <= 5; i++) await chrome.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: a.x + ((b.x - a.x) * i) / 5, y: a.y + ((b.y - a.y) * i) / 5, button: 'left', buttons: 1 });
+  await chrome.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...b, button: 'left', clickCount: 1 });
+}
+const openLayoutOutfit = async () => {
+  await chrome.evaluate(`document.querySelector('#outfitList .outfit-card').click()`);
+  await chrome.waitFor(`document.querySelector('#editForm canvas.outfit-preview')?.dataset.drawn === '2'`);
+};
+const savedOutfit = storeCall(`s.listOutfits().then(([o]) => o)`);
+const setRange = (label, v) => `(() => { const i = [...document.querySelectorAll('#editForm .adjust label')].find((l) => l.textContent.startsWith('${label}')).querySelector('input'); i.value = '${v}'; i.dispatchEvent(new Event('input')); })()`;
+
+test('手动调整：拖动上衣、调大小和角度、往前一层，保存后写进 layout，合成图重新生成；取消不保存', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  const ids = await chrome.evaluate(SEED_LAYOUT);
+  await chrome.goto(`${server.origin}/#v=outfits`);
+  await chrome.waitFor(compositeShown);
+  const sig0 = (await chrome.evaluate(cacheOf(`outfit:${ids.outfit}`))).sig;
+
+  // 取消：拖动后点取消，不保存
+  await openLayoutOutfit();
+  await chrome.evaluate(clickText('#editForm', '调整排版'));
+  await chrome.waitFor(`document.querySelector('#editForm canvas.outfit-preview')?.dataset.drawn === '2'`);
+  await dragOnPreview([0.47, 0.245], [0.3, 0.2]);
+  await chrome.evaluate(clickText('#editForm', '取消'));
+  assert.equal((await chrome.evaluate(savedOutfit)).layout, undefined);
+
+  // 拖动上衣（自动排版时中心在 0.47, 0.245）向左上
+  await openLayoutOutfit();
+  await chrome.evaluate(clickText('#editForm', '调整排版'));
+  await chrome.waitFor(`document.querySelector('#editForm canvas.outfit-preview')?.dataset.drawn === '2'`);
+  await dragOnPreview([0.47, 0.245], [0.3, 0.2]);
+  assert.equal(await chrome.evaluate(`document.querySelector('#editForm canvas.outfit-preview').dataset.selected`), 'top');
+  await chrome.evaluate(setRange('大小', 30));
+  await chrome.evaluate(setRange('角度', 20));
+  // 上衣已在最前，往前一层不变；往后一层和下装交换 z
+  await chrome.evaluate(clickText('#editForm', '往后一层'));
+  await chrome.evaluate(clickText('#editForm', '完成调整'));
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  const o = await chrome.evaluate(savedOutfit);
+  assert.ok(Math.abs(o.layout.top.x - 0.3) < 0.02 && Math.abs(o.layout.top.y - 0.2) < 0.02, JSON.stringify(o.layout.top));
+  assert.equal(o.layout.top.w, 0.3);
+  assert.equal(o.layout.top.rotation, 20);
+  assert.ok(o.layout.top.z < o.layout.bottom.z, JSON.stringify(o.layout));
+  await chrome.waitFor(`${cacheOf(`outfit:${ids.outfit}`)}.then((r) => r && r.sig !== ${JSON.stringify(JSON.stringify(sig0))})`);
+
+  // 拖出画板：中心点停在边上（0–1），保存不报错
+  await openLayoutOutfit();
+  await chrome.evaluate(clickText('#editForm', '调整排版'));
+  await chrome.waitFor(`document.querySelector('#editForm canvas.outfit-preview')?.dataset.drawn === '2'`);
+  await dragOnPreview([0.47, 0.6], [1.6, 1.4]);
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  const out = (await chrome.evaluate(savedOutfit)).layout.bottom;
+  assert.deepEqual([out.x, out.y], [1, 1]);
+});
+
+test('手动调整：换衣物后该槽位恢复自动；全部恢复自动后 layout 字段消失', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  const ids = await chrome.evaluate(SEED_LAYOUT);
+  const manual = { x: 0.3, y: 0.3, w: 0.3, rotation: 10, z: 9 };
+  await chrome.evaluate(storeCall(`s.listOutfits().then(([o]) => s.putOutfit({ ...o, layout: { top: ${JSON.stringify(manual)}, bottom: ${JSON.stringify(manual)} } }))`));
+  await chrome.goto(`${server.origin}/#v=outfits`);
+  await chrome.waitFor(compositeShown);
+  // 下装换成休闲裤：下装的手动排版去掉，上衣的保留
+  await openLayoutOutfit();
+  assert.equal(await chrome.evaluate(pickSlot('bottom', '休闲裤')), 2);
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  let o = await chrome.evaluate(savedOutfit);
+  assert.deepEqual(Object.keys(o.layout), ['top']);
+  assert.equal(o.slots.bottom, ids.pants);
+  // 全部恢复自动
+  await openLayoutOutfit();
+  await chrome.evaluate(clickText('#editForm', '调整排版'));
+  await chrome.evaluate(clickText('#editForm', '全部恢复自动'));
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  o = await chrome.evaluate(savedOutfit);
+  assert.equal('layout' in o, false);
+});

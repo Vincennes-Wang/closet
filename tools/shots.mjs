@@ -62,7 +62,9 @@ try {
     if (hash.includes('outfits')) await chrome.waitFor(`document.querySelector('#outfitList .outfit-card')`);
     if (action) await chrome.evaluate(action);
     // 图片按需加载：等视口内的图片都有 src 且解码完
-    await chrome.waitFor(`[...document.querySelectorAll('img')].filter((i) => { const r = i.getBoundingClientRect(); return r.bottom > 0 && r.top < innerHeight && r.width; }).every((i) => i.src && i.complete)`, 15000);
+    // 弹窗里的图片还要在弹窗的可见范围内（被弹窗滚动区裁掉的不会加载）
+    await chrome.waitFor(`[...document.querySelectorAll('img')].filter((i) => { const r = i.getBoundingClientRect(); const d = i.closest('dialog')?.getBoundingClientRect();
+      return r.bottom > 0 && r.top < innerHeight && r.width && (!d || (r.bottom > d.top && r.top < d.bottom)); }).every((i) => i.src && i.complete)`, 15000);
     await writeFile(join(out, `${name}.png`), await chrome.screenshot(w, h, { mobile }));
     console.log(join(out, `${name}.png`));
   }
@@ -99,7 +101,7 @@ try {
       await s.putOutfit({ name: '连衣裙 + 鞋', scenes: ['出行'], slots: { onepiece: id.dress, shoes: id.shoes } });
       s.close();
     })()`);
-    for (const [name, w, h, mobile, edit] of [['390-real-outfits', 390, 844, true], ['1280-real-outfits', 1280, 800, false], ['390-real-edit', 390, 844, true, true]]) {
+    for (const [name, w, h, mobile, edit] of [['390-real-outfits', 390, 844, true], ['1280-real-outfits', 1280, 800, false], ['390-real-edit', 390, 844, true, true], ['390-real-adjust', 390, 844, true, 'adjust']]) {
       await chrome.screenshot(w, h, { mobile });
       await chrome.goto(`${server.origin}/tests/blank.html`);
       await chrome.goto(`${server.origin}/#v=outfits`);
@@ -108,6 +110,15 @@ try {
       if (edit) {
         await chrome.evaluate(`[...document.querySelectorAll('#outfitList .outfit-card')].find((c) => c.textContent.startsWith('外套')).click()`);
         await chrome.waitFor(`document.querySelector('#editForm canvas.outfit-preview')?.dataset.drawn === '5'`, 15000);
+      }
+      if (edit === 'adjust') { // 调整模式：选中上衣（中心约 0.5, 0.245），拖到偏右并转一点
+        await chrome.evaluate(`[...document.querySelectorAll('#editForm button')].find((b) => b.textContent === '调整排版').click()`);
+        await chrome.waitFor(`document.querySelector('#editForm canvas.outfit-preview')?.dataset.drawn === '5'`, 15000);
+        await chrome.evaluate(`(() => { const c = document.querySelector('#editForm canvas.outfit-preview'); const r = c.getBoundingClientRect();
+          const ev = (type, fx, fy) => c.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, clientX: r.left + fx * r.width, clientY: r.top + fy * r.height }));
+          ev('pointerdown', 0.5, 0.245); ev('pointermove', 0.58, 0.26); ev('pointerup', 0.58, 0.26);
+          const a = [...document.querySelectorAll('#editForm .adjust input')][1]; a.value = '12'; a.dispatchEvent(new Event('input'));
+          c.scrollIntoView({ block: 'start' }); })()`);
       }
       await writeFile(join(out, `${name}.png`), await chrome.screenshot(w, h, { mobile }));
       console.log(join(out, `${name}.png`));

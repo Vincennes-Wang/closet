@@ -88,3 +88,43 @@ test('alphaBBox：裁掉透明边；阈值以下的半透明不算；全透明�
   assert.deepEqual(alphaBBox(pixels(10, 10, null)), { x0: 0, y0: 0, x1: 1, y1: 1 });
   assert.deepEqual(alphaBBox(pixels(10, 10, null, 255)), { x0: 0, y0: 0, x1: 1, y1: 1 });
 });
+
+// ---------- 手动调整（4e） ----------
+import { hitTest, clampPlacement, moveBy, setSize, setRotation, shiftLayer, resetSlot } from '../layout.js';
+const P = (x, y, w, z, aspect = 1, rotation = 0) => ({ x, y, w, z, aspect, rotation });
+
+test('hitTest：重叠时取上层；空白处返回 null；考虑旋转', () => {
+  const placed = { top: P(0.5, 0.3, 0.4, 4), outer: P(0.4, 0.3, 0.4, 1), shoes: P(0.5, 0.9, 0.3, 5, 3) };
+  assert.equal(hitTest(placed, 0.5, 0.3), 'top');
+  assert.equal(hitTest(placed, 0.24, 0.3), 'outer'); // 只在外套范围内
+  assert.equal(hitTest(placed, 0.05, 0.6), null);
+  // 细长条（宽 0.4、高很小）转 90° 后，竖直方向能点中、水平方向点不中
+  const bar = { bar: P(0.5, 0.5, 0.4, 1, 8, 90) };
+  assert.equal(hitTest(bar, 0.5, 0.62), 'bar');
+  assert.equal(hitTest(bar, 0.65, 0.5), null);
+});
+
+test('clampPlacement：中心点在画板内，宽 0.08–1，角度 −180–180', () => {
+  assert.deepEqual(clampPlacement({ x: 1.4, y: -0.2, w: 2, rotation: 200, z: 3 }), { x: 1, y: 0, w: 1, rotation: -160, z: 3 });
+  assert.deepEqual(clampPlacement({ x: 0.5, y: 0.5, w: 0.01, rotation: -190, z: 1 }), { x: 0.5, y: 0.5, w: 0.08, rotation: 170, z: 1 });
+  assert.deepEqual(moveBy(P(0.9, 0.5, 0.3, 2), 0.5, 0), { x: 1, y: 0.5, w: 0.3, rotation: 0, z: 2 });
+  assert.equal(setSize(P(0.5, 0.5, 0.3, 2), 0.6).w, 0.6);
+  assert.equal(setRotation(P(0.5, 0.5, 0.3, 2), 30).rotation, 30);
+});
+
+test('shiftLayer：和相邻的一件交换 z；已在最前 / 最后不变；z 相同时也能分开', () => {
+  const placed = { outer: P(0.4, 0.3, 0.4, 1), bottom: P(0.5, 0.6, 0.4, 2), top: P(0.5, 0.3, 0.4, 4) };
+  const r = shiftLayer(placed, 'outer', 1);
+  assert.deepEqual([r.outer.z, r.bottom.z], [2, 1]);
+  assert.deepEqual(shiftLayer(placed, 'top', 1), {});
+  assert.deepEqual(shiftLayer(placed, 'outer', -1), {});
+  const same = shiftLayer({ a: P(0.5, 0.5, 0.3, 2), b: P(0.5, 0.5, 0.3, 2) }, 'a', 1);
+  assert.ok(same.a.z !== same.b.z);
+});
+
+test('resetSlot：去掉一个槽位；全去掉返回 undefined', () => {
+  const l = { top: { x: 0.5, y: 0.3, w: 0.4, rotation: 0, z: 4 }, bottom: { x: 0.5, y: 0.6, w: 0.4, rotation: 0, z: 2 } };
+  assert.deepEqual(Object.keys(resetSlot(l, 'top')), ['bottom']);
+  assert.equal(resetSlot({ top: l.top }, 'top'), undefined);
+  assert.equal(resetSlot(undefined, 'top'), undefined);
+});

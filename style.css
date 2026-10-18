@@ -152,3 +152,10 @@ body.fatal main > :not(#fatal) { display: none; }
 dialog .picker-side { max-height: 70vh; }
 /* 弹窗比页面窄（手机约 334 px），选择器网格放小一点，保持 2 列 */
 dialog .picker-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
+/* 手动调整排版（4e）：只有调整模式下画布不跟手指滚动 */
+.outfit-preview.adjusting { touch-action: none; border: 2px solid var(--azul); cursor: grab; }
+.adjust-toggle { display: block; margin: 8px auto 0; }
+.adjust { display: grid; gap: 6px; margin: 8px 0; padding: 10px; border-radius: 12px; background: var(--celeste-soft); }
+.adjust p { margin: 0; }
+.adjust input[type="range"] { width: 100%; accent-color: var(--azul); }
+.adjust .actions { margin-top: 2px; gap: 6px; }
