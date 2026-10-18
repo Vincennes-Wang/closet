@@ -1,5 +1,5 @@
 import { SEASONS, SCENES } from './options.js';
-import { CATEGORIES, getNode, split, seasonsFor, labelOf, visibleTaxonomy } from './taxonomy.js';
+import { getNode, split, seasonsFor, labelOf, visibleTaxonomy, allTaxonomy, nameError, newCategoryRow } from './taxonomy.js';
 import { createPicker, parseFilter, filterParams } from './picker.js';
 import { openStore, groupByCategory } from './store.js';
 import { SLOTS, getSlot, itemsForSlot, taxonomyForSlot, slotState, outfitError, outfitSeasons, outfitsUsing, emptySlots } from './outfit.js';
@@ -41,6 +41,12 @@ async function openOrExplain() {
 }
 const store = await openOrExplain();
 if (!store) await new Promise(() => {}); // 停在提示页，不执行后面的代码
+// 分类表（自建分类、改名、隐藏），启动时和每次 render 读取。界面显示的分类都从这里算（4c）
+let catRows = await store.listCategoryRows();
+const tax = () => visibleTaxonomy(catRows);
+const label = (id) => labelOf(id, catRows);
+// 这个 id（一级、二级，或没有二级的一级）在可见分类里吗？用来过滤 AI 建议
+const isVisible = (id) => tax().some((c) => c.id === id || c.subs.some((s) => s.id === id));
 const urls = new Set(); // 当前显示中的 object URL（编辑弹窗大图），重新渲染时统一释放
 const images = createImageLoader(store); // 网格、搭配卡片：按需加载缩略图
 
@@ -68,16 +74,23 @@ function chips(name, options, selected, multiple) {
 const picked = (box) => [...box.children].filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.value);
 const setPicked = (box, values) => { for (const b of box.children) b.setAttribute('aria-pressed', String(values.includes(b.dataset.value))); };
 
-// 编辑表单（新录入走待确认列表）。换分类不改用户已选的季节
+// 编辑表单（新录入走待确认列表）。换分类不改用户已选的季节。
+// 分类选项 = 可见分类；衣物当前所在的分类即使已隐藏也列出来，避免编辑时丢掉
+function editTaxonomy(v) {
+  const all = allTaxonomy(catRows);
+  return all.filter((c) => !c.hidden || c.id === v.categoryId)
+    .map((c) => ({ ...c, subs: c.subs.filter((s) => !s.hidden || s.id === v.subcategoryId) }));
+}
 function itemFields(v = {}) {
   const opts = (nodes) => nodes.map((n) => ({ value: n.id, label: n.zh }));
-  const category = chips('category', opts(CATEGORIES), v.categoryId ? [v.categoryId] : [], false);
+  const options = editTaxonomy(v);
+  const category = chips('category', opts(options), v.categoryId ? [v.categoryId] : [], false);
   const subBox = el('div');
   let sub = null;
   const seasons = chips('seasons', SEASONS, v.seasons ?? [], true);
   // 二级分类随一级分类变化；没有二级分类的一级不显示这一行
   const renderSubs = (selected) => {
-    const c = getNode(picked(category)[0]);
+    const c = options.find((x) => x.id === picked(category)[0]);
     sub = c?.subs.length ? chips('subcategory', opts(c.subs), selected ? [selected] : [], false) : null;
     subBox.replaceChildren(sub ? el('div', { className: 'field' }, el('span', { textContent: '细分' }), sub) : '');
   };
@@ -106,10 +119,10 @@ function itemFields(v = {}) {
   };
 }
 
-// 分类没选全时的提示；选全了返回 ''
+// 分类没选全时的提示；选全了返回 ''。内置一级有二级时必须选二级；自建一级可以不选
 function categoryError(v) {
   if (!v.categoryId) return '请选择分类';
-  if (getNode(v.categoryId).subs.length && !v.subcategoryId) return '请选择细分';
+  if (getNode(v.categoryId)?.subs.length && !v.subcategoryId) return '请选择细分';
   return '';
 }
 
@@ -134,7 +147,7 @@ $('fileInput').addEventListener('change', async (e) => {
 function tile(item) {
   const b = el('button', { type: 'button', className: 'tile' },
     lazyImg(item),
-    el('span', { textContent: item.name || labelOf(item.subcategoryId ?? item.categoryId) }));
+    el('span', { textContent: item.name || label(item.subcategoryId ?? item.categoryId) }));
   b.addEventListener('click', () => openEdit(item));
   return b;
 }
@@ -148,7 +161,7 @@ function lazyImg(item) {
 function renderGroups(container, items) {
   container.replaceChildren(...groupByCategory(items).map((g) =>
     el('section', { className: 'group' },
-      el('h2', { textContent: `${labelOf(g.categoryId)} · ${g.items.length}` }),
+      el('h2', { textContent: `${label(g.categoryId)} · ${g.items.length}` }),
       el('div', { className: 'grid' }, ...g.items.map(tile)))));
 }
 
@@ -179,6 +192,7 @@ async function render() {
   for (const u of urls) URL.revokeObjectURL(u);
   urls.clear();
   const [all, rows] = await Promise.all([store.list({ includeArchived: true }), store.listCategoryRows()]);
+  catRows = rows;
   const taxonomy = visibleTaxonomy(rows);
   showStorage(all);
   showBackupAge(all.length);
@@ -187,6 +201,7 @@ async function render() {
     filter: parseFilter(location.hash, taxonomy),
     onFilterChange: writeHash,
     onSelect: openEdit,
+    labelFor: (item) => itemName(item),
     images,
   });
   picker.setData(all, taxonomy);
@@ -241,9 +256,107 @@ async function usedText(itemId, consequence) {
   return n ? `这件衣服在 ${n} 套搭配里，${consequence}` : '';
 }
 
+// ---------- 分类管理（4c，规则见 CLAUDE.md「分类规则」） ----------
+// 内置：改名、隐藏 / 显示；自建：改名、隐藏 / 显示、删除（分类下没有衣物时）；自建一级可选放进哪个搭配位置。
+// 箱包、配饰、帽子、套装这类没有二级的内置分类，不能新建二级（用户 2026-10-11 定）
+const SLOT_CHOICES = [['', '不放进搭配'], ...SLOTS.map((s) => [s.id, s.zh])];
+async function openCategories() {
+  const dialog = $('editDialog');
+  const msg = el('p', { className: 'error' });
+  const items = await store.list({ includeArchived: true });
+  const countOf = (id) => items.filter((i) => i.categoryId === id || i.subcategoryId === id).length;
+  const rowOf = (id) => catRows.find((r) => r.id === id);
+  const refresh = async () => { catRows = await store.listCategoryRows(); draw(); };
+  const act = (fn) => async () => { msg.textContent = ''; try { await fn(); await refresh(); } catch (err) { msg.textContent = err.message; } };
+  const btn = (text, fn, cls = 'small') => el('button', { type: 'button', className: cls, textContent: text, onclick: act(fn) });
+
+  // 改名：内置分类存 { id, zh }（保留已有的 hidden），自建分类改 zh
+  const rename = (n, parentId) => async () => {
+    const zh = prompt('新名称', n.zh);
+    if (zh === null || zh.trim() === n.zh) return;
+    const err = nameError(catRows, parentId, zh, n.id);
+    if (err) throw new Error(err);
+    await store.putCategoryRow({ ...(rowOf(n.id) ?? { id: n.id }), zh: zh.trim() });
+  };
+  const setHidden = (n, hidden) => async () => {
+    const count = countOf(n.id);
+    if (hidden && count && !confirm(`这个分类下有 ${count} 件衣物，隐藏后它们只在"全部"里显示。确定吗？`)) return;
+    await store.putCategoryRow({ ...(rowOf(n.id) ?? { id: n.id }), hidden });
+  };
+  const remove = (n) => async () => {
+    const subs = catRows.filter((r) => r.builtin === false && r.parentId === n.id).length;
+    if (!confirm(`删除"${n.zh}"${subs ? `和它下面的 ${subs} 个二级分类` : ''}吗？`)) return;
+    await store.removeCategoryRow(n.id);
+  };
+  const addSub = (c) => async () => {
+    const zh = prompt(`在"${c.zh}"下新建二级分类，名称：`);
+    if (zh === null) return;
+    const err = nameError(catRows, c.id, zh);
+    if (err) throw new Error(err);
+    await store.putCategoryRow(newCategoryRow({ parentId: c.id, zh }));
+  };
+
+  // 一行：名称、件数、改名、隐藏 / 显示、删除（自建）
+  function line(n, parentId) {
+    const count = countOf(n.id);
+    const row = el('div', { className: `cat-row${n.hidden ? ' cat-hidden' : ''}` },
+      parentId ? '' : el('span', { textContent: n.icon, ariaHidden: 'true' }),
+      el('span', { className: 'cat-name', textContent: n.zh }),
+      el('span', { className: 'muted', textContent: `${count} 件${n.hidden ? ' · 已隐藏' : ''}` }),
+      btn('改名', rename(n, parentId)),
+      btn(n.hidden ? '显示' : '隐藏', setHidden(n, !n.hidden)));
+    if (!n.builtin) {
+      const del = btn('删除', remove(n), 'small danger');
+      const subCount = parentId ? 0 : catRows.filter((r) => r.builtin === false && r.parentId === n.id).reduce((k, r) => k + countOf(r.id), 0);
+      if (count + subCount) { del.disabled = true; del.title = '分类下还有衣物，先把衣物移到别的分类'; }
+      row.append(del);
+      if (count + subCount) row.append(el('span', { className: 'muted', textContent: '有衣物，不能删除' }));
+    }
+    row.dataset.id = n.id;
+    return row;
+  }
+
+  function draw() {
+    const all = allTaxonomy(catRows);
+    const tops = all.map((c) => {
+      const box = el('div', { className: 'cat-top' }, line(c, null));
+      box.dataset.id = c.id;
+      if (!c.builtin) { // 自建一级：搭配位置
+        const sel = el('select', { ariaLabel: '搭配位置' }, ...SLOT_CHOICES.map(([v, t]) => el('option', { value: v, textContent: t, selected: (c.slot ?? '') === v })));
+        sel.onchange = act(() => store.putCategoryRow({ ...rowOf(c.id), slot: sel.value || null }));
+        box.append(el('div', { className: 'cat-row' }, el('span', { className: 'muted', textContent: '搭配位置' }), sel));
+      }
+      const canHaveSubs = !c.builtin || getNode(c.id).subs.length > 0;
+      box.append(el('div', { className: 'cat-subs' }, ...c.subs.map((s) => line(s, c.id)),
+        canHaveSubs ? btn('＋ 新建二级分类', addSub(c)) : ''));
+      return box;
+    });
+    // 新建一级分类：名称 + 搭配位置
+    const name = el('input', { type: 'text', placeholder: '新一级分类名称，如 泳衣' });
+    const slot = el('select', { ariaLabel: '搭配位置' }, ...SLOT_CHOICES.map(([v, t]) => el('option', { value: v, textContent: t })));
+    const create = btn('新建一级分类', async () => {
+      const err = nameError(catRows, null, name.value);
+      if (err) throw new Error(err);
+      await store.putCategoryRow(newCategoryRow({ zh: name.value, slot: slot.value || null }));
+    }, 'primary');
+    $('editForm').replaceChildren(
+      el('h2', { textContent: '管理分类' }),
+      el('p', { className: 'muted', textContent: '内置分类可以改名、隐藏；自己建的分类还可以删除（分类下没有衣物时）。自建分类不参与自动识别，录入时手动选。' }),
+      msg, ...tops,
+      el('div', { className: 'cat-new' }, name, el('label', { className: 'field' }, el('span', { textContent: '放进搭配的哪个位置' }), slot), create),
+      el('div', { className: 'actions' }, el('button', { type: 'button', textContent: '完成', onclick: () => dialog.close() })));
+  }
+  draw();
+  // 关闭（"完成"或 Esc）后刷新衣橱和待确认列表，显示新名称
+  dialog.addEventListener('close', () => { render(); renderQueue(); }, { once: true });
+  dialog.showModal();
+  dialog.focus();
+}
+$('catBtn').addEventListener('click', () => openCategories());
+
 // ---------- 搭配 ----------
 const STATE_TEXT = { deleted: '已删除', archived: '已归档' };
-const itemName = (item) => item.name || labelOf(item.subcategoryId ?? item.categoryId);
+const itemName = (item) => item.name || label(item.subcategoryId ?? item.categoryId);
 
 // 一个槽位的小图：有衣物显示缩略图，已删除 / 已归档显示文字
 function slotThumb(id, byId) {
@@ -281,6 +394,7 @@ $('newOutfit').addEventListener('click', () => openOutfit(null));
 async function openOutfit(saved) {
   const dialog = $('editDialog');
   const [all, rows] = await Promise.all([store.list({ includeArchived: true }), store.listCategoryRows()]);
+  catRows = rows;
   const byId = new Map(all.map((i) => [i.id, i]));
   const taxonomy = visibleTaxonomy(rows);
   const draft = saved ? { ...saved, slots: { ...saved.slots }, layout: saved.layout ? structuredClone(saved.layout) : undefined }
@@ -410,7 +524,7 @@ async function openOutfit(saved) {
     endSession();
     draft.name = name.value; draft.scenes = picked(scenes);
     const tax = taxonomyForSlot(slot, taxonomy);
-    const choices = itemsForSlot(slot, all);
+    const choices = itemsForSlot(slot, all, catRows);
     const box = el('div');
     $('editForm').replaceChildren(
       el('div', { className: 'pick-head' },
@@ -524,8 +638,8 @@ function reviewCard(r) {
     return { node, choice: () => null, confirm: async () => {}, showError: () => {} };
   }
 
-  // 当前选择：默认是分类建议的第一名
-  const top3 = r.classify?.status === 'done' ? r.classify.top3 : [];
+  // 当前选择：默认是分类建议的第一名。已隐藏的分类不出现在建议里（4c）
+  const top3 = (r.classify?.status === 'done' ? r.classify.top3 : []).filter((t) => isVisible(t.id));
   let choice = top3[0] ? split(top3[0].id) : null;
   let useOriginal = false;
   const msg = el('p', { className: 'error' });
@@ -552,9 +666,9 @@ function reviewCard(r) {
   const other = el('div', { className: 'other', hidden: true });
   const label = el('p', { className: 'choice' });
   const renderChoice = () => {
-    label.textContent = choice ? labelOf(choice.subcategoryId ?? choice.categoryId) : '请选择分类';
+    label.textContent = choice ? labelOf(choice.subcategoryId ?? choice.categoryId, catRows) : '请选择分类';
     candidates.replaceChildren(...top3.map((t) => {
-      const b = el('button', { type: 'button', className: 'chip', textContent: `${labelOf(t.id)} ${Math.round(t.score * 100)}%` });
+      const b = el('button', { type: 'button', className: 'chip', textContent: `${labelOf(t.id, catRows)} ${Math.round(t.score * 100)}%` });
       b.setAttribute('aria-pressed', String((choice?.subcategoryId ?? choice?.categoryId) === t.id));
       b.addEventListener('click', () => pick(split(t.id)));
       return b;
@@ -564,10 +678,11 @@ function reviewCard(r) {
     other.hidden = !other.hidden;
     if (other.hidden) return;
     // 一级 → 细分；没有细分的一级直接选中
-    const cats = chips('category', CATEGORIES.map((c) => ({ value: c.id, label: c.zh })), [], false);
+    const options = tax();
+    const cats = chips('category', options.map((c) => ({ value: c.id, label: c.zh })), [], false);
     const subs = el('div');
     cats.addEventListener('change', () => {
-      const c = getNode(picked(cats)[0]);
+      const c = options.find((x) => x.id === picked(cats)[0]);
       if (!c.subs.length) { pick({ categoryId: c.id, subcategoryId: null }); subs.replaceChildren(); return; }
       const box = chips('subcategory', c.subs.map((x) => ({ value: x.id, label: x.zh })), [], false);
       box.addEventListener('change', () => pick({ categoryId: c.id, subcategoryId: picked(box)[0] }));

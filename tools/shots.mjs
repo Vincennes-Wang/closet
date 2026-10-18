@@ -35,6 +35,11 @@ const SEED = `(async () => {
       slots: { onepiece: dress, top: dress ? null : pick(of('top'), k), bottom: dress ? null : pick(of('bottom'), k), shoes: pick(of('shoes'), k),
         outer: k % 2 ? pick(of('outer'), k) : null, bag: k % 3 ? pick(of('bag'), k) : null } });
   }
+  // 分类管理截图用：一个改名、一个隐藏、一个自建一级（搭配位置 = 连衣裙 / 套装）带一个二级
+  await s.putCategoryRow({ id: 'top.shirt', zh: '正装衬衫' });
+  await s.putCategoryRow({ id: 'top.tank', hidden: true });
+  await s.putCategoryRow({ id: 'u-swim', parentId: null, zh: '泳衣', hidden: false, builtin: false, slot: 'onepiece' });
+  await s.putCategoryRow({ id: 'u-bikini', parentId: 'u-swim', zh: '比基尼', hidden: false, builtin: false });
   s.close();
 })()`;
 
@@ -47,6 +52,8 @@ try {
   for (const [name, w, h, mobile, hash, action] of [
     ['390-all', 390, 844, true, ''], ['390-top', 390, 844, true, '#c=top&season=夏'], ['1280-top', 1280, 800, false, '#c=top'],
     ['390-outfits', 390, 844, true, '#v=outfits'], ['1280-outfits', 1280, 800, false, '#v=outfits'],
+    ['390-categories', 390, 844, true, '', `document.getElementById('catBtn').click()`],
+    ['1280-categories', 1280, 800, false, '', `document.getElementById('catBtn').click()`],
     ['390-outfit-edit', 390, 844, true, '#v=outfits', openFirst],
     ['390-outfit-pick', 390, 844, true, '#v=outfits', `(async () => { ${openFirst};
       while (!document.querySelector('.slot-row')) await new Promise((ok) => setTimeout(ok, 50));

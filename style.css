@@ -51,7 +51,8 @@ label.primary { display: block; text-align: center; padding: 14px; font-size: 17
 .tile img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 8px; }
 .tile span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.archived-btn { display: block; margin-top: 24px; margin-bottom: 8px; font-size: 14px; color: var(--muted); }
+.closet-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 24px 0 8px; }
+.archived-btn { font-size: 14px; color: var(--muted); }
 #archived .tile { opacity: .6; }
 
 /* 抠图队列 */
@@ -78,7 +79,7 @@ button.small { font-size: 13px; padding: 4px 10px; justify-self: start; }
 .toggle-inline input { accent-color: var(--azul); }
 /* 抠图进行中只显示进度，不渲染衣橱，少占内存 */
 body.processing #addLabel, body.processing #closet, body.processing #empty,
-body.processing #archivedBtn, body.processing #archived, body.processing #backup { display: none; }
+body.processing #closetTools, body.processing #archived, body.processing #backup { display: none; }
 /* 备份：超过 7 天没备份（或有衣物却从未备份）时页头用提醒色。白底对比度约 6:1 */
 header .warn { color: var(--warn); font-weight: 600; }
 #backup h2 { margin-top: 4px; }
@@ -121,7 +122,7 @@ dialog::backdrop { background: rgb(21 48 77 / 40%); }
 .views button[aria-pressed="true"] { background: var(--celeste); font-weight: 600; }
 body:not(.view-outfits) #outfits { display: none; }
 body.view-outfits #addLabel, body.view-outfits #queueMsg, body.view-outfits #queue, body.view-outfits #closet,
-body.view-outfits #empty, body.view-outfits #archivedBtn, body.view-outfits #archived { display: none; }
+body.view-outfits #empty, body.view-outfits #closetTools, body.view-outfits #archived { display: none; }
 body.processing #views, body.processing #outfits { display: none; }
 /* 打不开数据库时只显示提示 */
 body.fatal main > :not(#fatal) { display: none; }
@@ -159,3 +160,15 @@ dialog .picker-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr
 .adjust p { margin: 0; }
 .adjust input[type="range"] { width: 100%; accent-color: var(--azul); }
 .adjust .actions { margin-top: 2px; gap: 6px; }
+
+/* 分类管理（4c） */
+.cat-top { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; margin-bottom: 8px; background: var(--card); }
+.cat-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 40px; }
+.cat-row .cat-name { flex: 1; min-width: 6em; font-size: 15px; }
+.cat-top > .cat-row .cat-name { font-weight: 600; }
+.cat-row .muted { font-size: 12px; }
+.cat-subs { margin: 4px 0 0 18px; display: grid; gap: 2px; }
+.cat-hidden .cat-name, .cat-hidden > .cat-name { color: var(--muted); text-decoration: line-through; }
+.cat-row select { font: inherit; font-size: 13px; padding: 4px; border-radius: 8px; border: 1px solid var(--line); }
+.cat-new { display: grid; gap: 8px; margin-top: 12px; padding: 10px; border-radius: 12px; background: var(--celeste-soft); }
+.cat-new input, .cat-new select { font: inherit; font-size: 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }

@@ -542,6 +542,7 @@ const SEED = `(async () => {
   await s.archive(c.id);
   await s.putCategoryRow({ id: 'u1', parentId: 'top', zh: 'polo', hidden: false, builtin: false });
   await s.putCategoryRow({ id: 'top.vest', zh: '吊带', hidden: true });
+  await s.putCategoryRow({ id: 'u-swim', parentId: null, zh: '泳衣', hidden: false, builtin: false, slot: 'onepiece' }); // 4c：自建一级带搭配位置
   const o = await s.putOutfit({ id: 'outfit-1', name: '周末', scenes: ['休闲'], slots: { top: a.id, bottom: b.id, shoes: 'gone' }, layout: { top: { x: 0.5, y: 0.3, w: 0.4, rotation: 10, z: 4 } } });
   await s.importData({ items: [], categories: [], plans: [{ id: 'plan-1', createdAt: 1, date: '2026-10-19', outfitId: o.id }] });
   s.close();
@@ -1091,4 +1092,146 @@ test('手动调整：换衣物后该槽位恢复自动；全部恢复自动后 l
   await chrome.waitFor(`!document.getElementById('editDialog').open`);
   o = await chrome.evaluate(savedOutfit);
   assert.equal('layout' in o, false);
+});
+
+// ---------- 阶段 4c：分类管理 ----------
+const openCats = async () => {
+  await chrome.evaluate(`document.getElementById('catBtn').click()`);
+  await chrome.waitFor(`document.getElementById('editDialog').open && document.querySelector('#editForm h2')?.textContent === '管理分类'`);
+};
+const closeCats = async () => {
+  await chrome.evaluate(clickText('#editForm', '完成'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+};
+// 点分类管理里某一行的按钮
+const catBtn = (id, text) => `[...document.querySelector('#editForm .cat-row[data-id="${id}"]').querySelectorAll('button')].find((b) => b.textContent === '${text}').click()`;
+const waitCat = (cond) => chrome.waitFor(`(() => { const r = document.querySelector('#editForm .cat-row[data-id="${cond.id}"]'); return ${cond.expr}; })()`);
+const tileNames = `[...document.querySelectorAll('#closet .tile span')].map((s) => s.textContent).sort()`;
+const sideNames = `[...document.querySelectorAll('#closet .side-item .side-name')].map((s) => s.textContent)`;
+
+test('分类管理：内置改名（左边栏、衣物名、刷新后都变）；隐藏有衣物的分类先提示，"全部"里衣物还在；再显示恢复', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.evaluate(SEED_CLOSET);
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  await chrome.evaluate(`window.prompt = (q, d) => window.__answers.shift(); window.confirm = (m) => { window.__confirm = m; return true; }`);
+
+  await openCats();
+  await chrome.evaluate(`window.__answers = ['上装', '正装衬衫']`);
+  await chrome.evaluate(catBtn('top', '改名'));
+  await waitCat({ id: 'top', expr: `r && r.querySelector('.cat-name').textContent === '上装'` });
+  await chrome.evaluate(catBtn('top.shirt', '改名'));
+  await waitCat({ id: 'top.shirt', expr: `r && r.querySelector('.cat-name').textContent === '正装衬衫'` });
+  // 重名：改成"背心"（同一级里已有）被拒绝
+  await chrome.evaluate(`window.__answers = ['背心']`);
+  await chrome.evaluate(catBtn('top.shirt', '改名'));
+  await chrome.waitFor(`document.querySelector('#editForm p.error').textContent === '已有同名分类'`);
+  // 隐藏"休闲短袖"（2 件 + 1 件已归档）
+  await chrome.evaluate(catBtn('top.casual_tee', '隐藏'));
+  await waitCat({ id: 'top.casual_tee', expr: `r && r.classList.contains('cat-hidden')` });
+  assert.equal(await chrome.evaluate('window.__confirm'), '这个分类下有 3 件衣物，隐藏后它们只在"全部"里显示。确定吗？');
+  // 隐藏一级"裤子"
+  await chrome.evaluate(catBtn('bottom', '隐藏'));
+  await waitCat({ id: 'bottom', expr: `r && r.classList.contains('cat-hidden')` });
+  await closeCats();
+
+  await chrome.waitFor(`${sideNames}.includes('上装')`);
+  assert.ok(!(await chrome.evaluate(sideNames)).includes('裤子'));
+  assert.equal(await chrome.evaluate(tiles), 5); // "全部"里衣物都在
+  assert.ok((await chrome.evaluate(tileNames)).includes('正装衬衫'));
+  await chrome.evaluate(clickSide('top'));
+  assert.ok(!(await chrome.evaluate(`[...document.querySelectorAll('#closet .chips[data-name="sub"] .chip')].map((b) => b.textContent)`)).includes('休闲短袖'));
+  await chrome.reload();
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  assert.ok((await chrome.evaluate(sideNames)).includes('上装'));
+  assert.ok((await chrome.evaluate(tileNames)).includes('正装衬衫'));
+
+  // 再显示裤子
+  await chrome.evaluate(`window.confirm = () => true`);
+  await openCats();
+  await chrome.evaluate(catBtn('bottom', '显示'));
+  await waitCat({ id: 'bottom', expr: `r && !r.classList.contains('cat-hidden')` });
+  await closeCats();
+  await chrome.waitFor(`${sideNames}.includes('裤子')`);
+});
+
+test('分类管理：新建一级（搭配位置 = 上衣）和二级 → 衣物改到新分类 → 搭配上衣槽位能选到；有衣物不能删、内置没有删除；移走后连同二级一起删', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  const ids = await chrome.evaluate(SEED_OUTFIT);
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1'`);
+  await chrome.evaluate(`window.prompt = (q, d) => window.__answers.shift(); window.confirm = (m) => { window.__confirm = m; return true; }`);
+
+  await openCats();
+  // 内置分类没有删除按钮；没有二级的内置分类（箱包）不能新建二级
+  assert.equal(await chrome.evaluate(`[...document.querySelectorAll('#editForm .cat-row[data-id="top"] button')].some((b) => b.textContent === '删除')`), false);
+  assert.equal(await chrome.evaluate(`[...document.querySelector('#editForm .cat-top[data-id="bag"]').querySelectorAll('button')].some((b) => b.textContent === '＋ 新建二级分类')`), false);
+  await chrome.evaluate(`(() => { const f = document.querySelector('#editForm .cat-new'); f.querySelector('input').value = '运动上衣'; f.querySelector('select').value = 'top'; })()`);
+  await chrome.evaluate(clickText('#editForm .cat-new', '新建一级分类'));
+  await chrome.waitFor(`[...document.querySelectorAll('#editForm .cat-top')].some((t) => t.textContent.includes('运动上衣'))`);
+  const customId = await chrome.evaluate(`[...document.querySelectorAll('#editForm .cat-top')].find((t) => t.textContent.includes('运动上衣')).dataset.id`);
+  assert.match(customId, /^u-/);
+  await chrome.evaluate(`window.__answers = ['Polo']`);
+  await chrome.evaluate(`[...document.querySelector('#editForm .cat-top[data-id="${customId}"]').querySelectorAll('button')].find((b) => b.textContent === '＋ 新建二级分类').click()`);
+  await chrome.waitFor(`document.querySelector('#editForm .cat-top[data-id="${customId}"]').textContent.includes('Polo')`);
+  await closeCats();
+
+  // 衬衫改到"运动上衣 / Polo"
+  await chrome.waitFor(`${sideNames}.includes('运动上衣')`);
+  await chrome.evaluate(`[...document.querySelectorAll('#closet .tile')].find((t) => t.textContent === '衬衫').click()`);
+  await chrome.evaluate(clickText('#editForm .chips', '运动上衣'));
+  await chrome.evaluate(clickText('#editForm .chips', 'Polo'));
+  await chrome.evaluate(`(() => { const i = document.querySelectorAll('#editForm input')[0]; i.value = ''; })()`); // 名称清空，显示分类名
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  const shirt = await chrome.evaluate(storeCall(`s.get('${ids.shirt}')`));
+  assert.equal(shirt.categoryId, customId);
+  await chrome.waitFor(`${tileNames}.includes('Polo')`);
+
+  // 搭配：上衣槽位能选到它
+  await chrome.evaluate(clickText('#views', '搭配'));
+  await chrome.evaluate(`document.getElementById('newOutfit').click()`);
+  await chrome.waitFor(`document.getElementById('editDialog').open`);
+  assert.equal(await chrome.evaluate(pickSlot('top', 'Polo')), 1);
+  assert.equal(await chrome.evaluate(pickSlot('bottom', '牛仔裤')), 1);
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  assert.equal((await chrome.evaluate(storeCall(`s.listOutfits()`)))[0].slots.top, ids.shirt);
+
+  // 有衣物：删除按钮不可用
+  await chrome.evaluate(clickText('#views', '衣橱'));
+  await openCats();
+  assert.equal(await chrome.evaluate(`[...document.querySelectorAll('#editForm .cat-row[data-id="${customId}"] button')].find((b) => b.textContent === '删除').disabled`), true);
+  assert.ok(await chrome.evaluate(`document.querySelector('#editForm .cat-row[data-id="${customId}"]').textContent.includes('有衣物，不能删除')`));
+  await closeCats();
+  // 移回 上衣 / 衬衫 后可以删，二级一起删
+  await chrome.evaluate(`[...document.querySelectorAll('#closet .tile')].find((t) => t.textContent === 'Polo').click()`);
+  await chrome.evaluate(clickText('#editForm .chips', '上衣'));
+  await chrome.evaluate(clickText('#editForm .chips', '衬衫'));
+  await chrome.evaluate(clickText('#editForm', '保存'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open`);
+  await openCats();
+  await chrome.evaluate(catBtn(customId, '删除'));
+  await chrome.waitFor(`!document.querySelector('#editForm .cat-top[data-id="${customId}"]')`);
+  assert.equal(await chrome.evaluate('window.__confirm'), '删除"运动上衣"和它下面的 1 个二级分类吗？');
+  assert.deepEqual(await chrome.evaluate(storeCall(`s.listCategoryRows()`)), []);
+  await closeCats();
+});
+
+test('分类管理：隐藏的内置分类不出现在 AI 建议里，第一名被隐藏时用下一个', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.evaluate(storeCall(`(async () => {
+    const c = new OffscreenCanvas(40, 40); c.getContext('2d').fillRect(5, 5, 20, 20);
+    const image = await c.convertToBlob({ type: 'image/png' });
+    const r = await s.enqueue({ original: image, hasAlpha: true, thumb: image });
+    await s.patchQueued(r.id, (x) => ({ ...x, classify: { ...x.classify, status: 'done', top3: [{ id: 'top.shirt', score: 0.8 }, { id: 'top.casual_tee', score: 0.1 }, { id: 'top.tank', score: 0.05 }] } }));
+    await s.putCategoryRow({ id: 'top.shirt', hidden: true });
+  })()`));
+  await chrome.goto(`${server.origin}/`);
+  await chrome.waitFor(`document.querySelectorAll('#queue .review .choice').length === 1`);
+  assert.equal(await chrome.evaluate(`document.querySelector('#queue .review .choice').textContent`), '休闲短袖');
+  assert.deepEqual(await chrome.evaluate(`[...document.querySelectorAll('#queue .review .chips')[0].querySelectorAll('.chip')].map((b) => b.textContent)`), ['休闲短袖 10%', '背心 5%']);
 });

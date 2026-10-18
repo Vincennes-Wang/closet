@@ -45,7 +45,7 @@ export function validate(item, categoryRows = []) {
 const copyList = (v) => (Array.isArray(v) ? [...v] : v ?? []);
 
 // 新记录：补默认值，只保留规定字段（不记录价格、材质）
-export function newItem(input, { id = crypto.randomUUID(), now = Date.now() } = {}) {
+export function newItem(input, { id = crypto.randomUUID(), now = Date.now(), categoryRows = [] } = {}) {
   return validate({
     id,
     createdAt: now,
@@ -58,17 +58,18 @@ export function newItem(input, { id = crypto.randomUUID(), now = Date.now() } = 
     scenes: copyList(input.scenes),
     color: (input.color ?? '').trim(),
     archived: false,
-  });
+  }, categoryRows);
 }
 
-export function applyPatch(item, patch) {
+// categoryRows：分类表记录（放行自建分类，见 validate）
+export function applyPatch(item, patch, categoryRows = []) {
   const next = { ...item };
   for (const key of EDITABLE) {
     if (!(key in patch)) continue;
     const v = patch[key];
     next[key] = typeof v === 'string' ? v.trim() : Array.isArray(v) ? [...v] : v;
   }
-  return validate(next);
+  return validate(next, categoryRows);
 }
 
 // 按一级分类分组，组按 taxonomy.js 顺序，组内新的在前；空组不返回
@@ -153,17 +154,22 @@ export async function openStore(idbFactory = globalThis.indexedDB, { version = D
     const current = await tx('readonly', (os) => req(os.get(id)));
     if (!current) throw new Error(`找不到衣物 ${id}`);
     const image = new Blob([await current.image.arrayBuffer()], { type: current.image.type });
+    const rows = await tx('readonly', (os) => req(os.getAll()), CATS); // 放行自建分类
     return tx('readwrite', async (os) => {
       const item = await req(os.get(id));
       if (!item) throw new Error(`找不到衣物 ${id}`);
-      const next = applyPatch({ ...item, image }, patch);
+      const next = applyPatch({ ...item, image }, patch, rows);
       os.put(next);
       return next;
     });
   }
 
   return {
-    async add(input) { const item = newItem(input); await tx('readwrite', (os) => req(os.add(item))); return item; },
+    async add(input) {
+      const item = newItem(input, { categoryRows: await tx('readonly', (os) => req(os.getAll()), CATS) });
+      await tx('readwrite', (os) => req(os.add(item)));
+      return item;
+    },
     get: (id) => tx('readonly', (os) => req(os.get(id))),
     update,
     async list({ includeArchived = false } = {}) {
@@ -239,7 +245,8 @@ export async function openStore(idbFactory = globalThis.indexedDB, { version = D
       if (!rec) throw new Error(`找不到队列记录 ${id}`);
       const cut = rec.status === 'cutout_done' && !useOriginal;
       const image = await copyBlob(cut ? rec.cutout : rec.original);
-      const item = newItem({ image, hasAlpha: cut || rec.hasAlpha, categoryId, subcategoryId, seasons, scenes: [] });
+      const categoryRows = await tx('readonly', (os) => req(os.getAll()), CATS); // 放行自建分类
+      const item = newItem({ image, hasAlpha: cut || rec.hasAlpha, categoryId, subcategoryId, seasons, scenes: [] }, { categoryRows });
       const t = db.transaction([STORE, QUEUE], 'readwrite');
       const done = new Promise((ok, fail) => { t.oncomplete = ok; t.onerror = () => fail(t.error); t.onabort = () => fail(t.error); });
       t.objectStore(STORE).add(item);
@@ -271,13 +278,22 @@ export async function openStore(idbFactory = globalThis.indexedDB, { version = D
     // ---------- 分类表（自建分类、改名、隐藏）。规则见 CLAUDE.md"分类规则"，界面在阶段 4 ----------
     listCategoryRows: () => tx('readonly', (os) => req(os.getAll()), CATS),
     putCategoryRow: (row) => tx('readwrite', (os) => req(os.put(row)), CATS),
-    // 只能删自建分类，且分类下没有衣物
+    // 只能删自建分类，且分类下没有衣物（含已归档）。删一级时它下面的自建二级一起删，同一个事务
     async removeCategoryRow(id) {
-      const row = await tx('readonly', (os) => req(os.get(id)), CATS);
+      const rows = await tx('readonly', (os) => req(os.getAll()), CATS);
+      const row = rows.find((r) => r.id === id);
       if (!row || row.builtin !== false) throw new Error('内置分类不能删除，只能隐藏');
-      const used = (await tx('readonly', (os) => req(os.getAll()))).some((i) => i.categoryId === id || i.subcategoryId === id);
-      if (used) throw new Error('这个分类下还有衣物，先把衣物移到别的分类');
-      await tx('readwrite', (os) => req(os.delete(id)), CATS);
+      const ids = [id, ...rows.filter((r) => r.builtin === false && r.parentId === id).map((r) => r.id)];
+      const t = db.transaction([STORE, CATS], 'readwrite');
+      const done = new Promise((ok, fail) => { t.oncomplete = ok; t.onerror = () => fail(t.error); t.onabort = () => fail(t.error ?? new Error('删除已中止')); });
+      const items = await req(t.objectStore(STORE).getAll());
+      if (items.some((i) => ids.includes(i.categoryId) || ids.includes(i.subcategoryId))) {
+        t.abort();
+        await done.catch(() => {});
+        throw new Error('这个分类下还有衣物，先把衣物移到别的分类');
+      }
+      for (const x of ids) t.objectStore(CATS).delete(x);
+      await done;
     },
 
     // ---------- 备份（backup.js） ----------

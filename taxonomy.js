@@ -119,10 +119,38 @@ export function visibleTaxonomy(rows = []) {
         ...custom.filter((r) => r.parentId === c.id).map((r) => ({ id: r.id, zh: r.zh, builtin: false }))],
     })),
     ...custom.filter((r) => !r.parentId).map((r) => ({
-      id: r.id, icon: CUSTOM_ICON, zh: r.zh, builtin: false,
+      id: r.id, icon: CUSTOM_ICON, zh: r.zh, builtin: false, slot: r.slot ?? null,
       subs: custom.filter((s) => s.parentId === r.id).map((s) => ({ id: s.id, zh: s.zh, builtin: false })),
     })),
   ];
+}
+
+// 分类管理界面用（4c）：全部分类，含已隐藏的（hidden: true）。自建一级带搭配位置 slot（槽位 id 或 null）
+export function allTaxonomy(rows = []) {
+  const over = new Map(rows.map((r) => [r.id, r]));
+  const node = (n, builtin) => ({ id: n.id, zh: over.get(n.id)?.zh ?? n.zh, builtin, hidden: !!over.get(n.id)?.hidden });
+  const custom = rows.filter((r) => r.builtin === false);
+  const subsOf = (id) => custom.filter((r) => r.parentId === id).map((r) => node(r, false));
+  return [
+    ...CATEGORIES.map((c) => ({ ...node(c, true), icon: c.icon, subs: [...c.subs.map((s) => node(s, true)), ...subsOf(c.id)] })),
+    ...custom.filter((r) => !r.parentId).map((r) => ({ ...node(r, false), icon: CUSTOM_ICON, slot: r.slot ?? null, subs: subsOf(r.id) })),
+  ];
+}
+
+// 新建或改名时的重名检查：同一级下（parentId 相同；一级分类 parentId 为 null）不能和可见的分类重名。
+// exceptId：改名时排除自己。没问题返回 null
+export function nameError(rows, parentId, zh, exceptId = null) {
+  const name = zh.trim();
+  if (!name) return '请填写名称';
+  if (name.length > 12) return '名称最多 12 个字';
+  const tax = allTaxonomy(rows);
+  const siblings = parentId ? tax.find((c) => c.id === parentId)?.subs ?? [] : tax;
+  return siblings.some((n) => !n.hidden && n.id !== exceptId && n.zh === name) ? '已有同名分类' : null;
+}
+
+// 新建自建分类的记录。slot 只对一级分类有意义（放进哪个搭配槽位，null = 不放进搭配）
+export function newCategoryRow({ parentId = null, zh, slot = null }, id = `u-${crypto.randomUUID()}`) {
+  return { id, parentId, zh: zh.trim(), hidden: false, builtin: false, ...(parentId ? {} : { slot }) };
 }
 
 // 显示名（含用户改名）。找不到时返回 id，方便发现问题

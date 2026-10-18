@@ -79,3 +79,42 @@ test('label-embeddings.json 与 taxonomy.js 一致（改了 prompt 要运行 nod
     assert.ok(Math.abs(norm - 1) < 1e-3, `${l.id} 范数 ${norm}`);
   }
 });
+
+// ---------- 分类管理（4c） ----------
+import { allTaxonomy, nameError, newCategoryRow } from '../taxonomy.js';
+
+test('allTaxonomy：含已隐藏的项（hidden 标记）、改名、自建一级的搭配位置', () => {
+  const rows = [
+    { id: 'top.tank', hidden: true }, { id: 'top', zh: '上装' },
+    { id: 'u1', parentId: null, zh: '泳衣', hidden: false, builtin: false, slot: 'onepiece' },
+    { id: 'u2', parentId: 'u1', zh: '比基尼', hidden: true, builtin: false },
+  ];
+  const all = allTaxonomy(rows);
+  const top = all.find((c) => c.id === 'top');
+  assert.equal(top.zh, '上装');
+  assert.equal(top.subs.find((s) => s.id === 'top.tank').hidden, true);
+  const swim = all.at(-1);
+  assert.deepEqual({ id: swim.id, slot: swim.slot, icon: swim.icon, builtin: swim.builtin }, { id: 'u1', slot: 'onepiece', icon: '🏷️', builtin: false });
+  assert.deepEqual(swim.subs.map((s) => [s.id, s.hidden]), [['u2', true]]);
+  assert.equal(visibleTaxonomy(rows).at(-1).slot, 'onepiece');
+});
+
+test('nameError：同一级下不能和可见分类重名；隐藏的、自己、别的级别不算；空名、过长报错', () => {
+  const rows = [{ id: 'top.tank', hidden: true }];
+  assert.equal(nameError(rows, 'top', '衬衫'), '已有同名分类');
+  assert.equal(nameError(rows, 'top', ' 衬衫 '), '已有同名分类');
+  assert.equal(nameError(rows, 'top', '背心'), null); // 背心已隐藏
+  assert.equal(nameError(rows, 'top', '衬衫', 'top.shirt'), null); // 改名时排除自己
+  assert.equal(nameError(rows, 'bottom', '衬衫'), null);
+  assert.equal(nameError(rows, null, '上衣'), '已有同名分类');
+  assert.equal(nameError(rows, null, '  '), '请填写名称');
+  assert.equal(nameError(rows, null, '一二三四五六七八九十一二三'), '名称最多 12 个字');
+});
+
+test('newCategoryRow：一级带搭配位置，二级不带；id 以 u- 开头；放进分类表后 categoryError 认它', () => {
+  const t = newCategoryRow({ zh: ' 泳衣 ', slot: 'onepiece' }, 'u-a');
+  assert.deepEqual(t, { id: 'u-a', parentId: null, zh: '泳衣', hidden: false, builtin: false, slot: 'onepiece' });
+  const s = newCategoryRow({ parentId: 'top', zh: 'Polo' }, 'u-b');
+  assert.deepEqual(s, { id: 'u-b', parentId: 'top', zh: 'Polo', hidden: false, builtin: false });
+  assert.match(newCategoryRow({ zh: 'x' }).id, /^u-[0-9a-f-]{36}$/);
+});

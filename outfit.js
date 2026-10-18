@@ -17,16 +17,20 @@ const SLOT_IDS = SLOTS.map((s) => s.id);
 export const getSlot = (id) => SLOTS.find((s) => s.id === id);
 
 // 一级分类 + 二级分类是否能放进这个槽位。自建二级（4c）跟随所属一级：只有不限二级的规则才放行
-export function fits(slot, categoryId, subcategoryId) {
-  return slot.accepts.some(([c, s]) => c === categoryId && (!s || s === subcategoryId));
+// rows：分类表记录。自建一级分类的 slot 等于这个槽位时放行（它下面的二级跟着放行，用户 2026-10-18 定）
+export function fits(slot, categoryId, subcategoryId, rows = []) {
+  if (slot.accepts.some(([c, s]) => c === categoryId && (!s || s === subcategoryId))) return true;
+  const row = rows.find((r) => r.id === categoryId && r.builtin === false && !r.parentId);
+  return !!row && row.slot === slot.id;
 }
 
 // 选择器用：这个槽位能选的衣物（不含已归档）
-export const itemsForSlot = (slot, items) => items.filter((i) => !i.archived && fits(slot, i.categoryId, i.subcategoryId));
+export const itemsForSlot = (slot, items, rows = []) => items.filter((i) => !i.archived && fits(slot, i.categoryId, i.subcategoryId, rows));
 
 // 选择器左边栏和二级分类行：只留这个槽位能放的一级、二级（taxonomy 是 visibleTaxonomy() 的结果）
 export function taxonomyForSlot(slot, taxonomy) {
   return taxonomy.flatMap((c) => {
+    if (c.builtin === false && c.slot === slot.id) return [c]; // 自建一级分类按它的搭配位置
     const rules = slot.accepts.filter(([cat]) => cat === c.id);
     if (!rules.length) return [];
     if (rules.some(([, s]) => !s)) return [c];

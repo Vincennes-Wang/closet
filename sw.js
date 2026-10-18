@@ -1,5 +1,5 @@
 // 离线缓存应用文件。改了下面任一文件后，把版本号加 1，用户下次打开时更新。
-const CACHE = 'closet-v26';
+const CACHE = 'closet-v27';
 const FILES = [
   './', 'index.html', 'app.js', 'store.js', 'image.js', 'options.js', 'style.css',
   'config.js', 'queue.js', 'backup.js', 'picker.js', 'outfit.js', 'thumbs.js', 'layout.js', 'model-worker.js', 'taxonomy.js', 'label-embeddings.json',

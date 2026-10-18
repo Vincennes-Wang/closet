@@ -92,3 +92,17 @@ test('validateOutfit：可选的 layout（4e 手动排版）检查槽位名和�
   assert.throws(() => validateOutfit({ id: 'o', createdAt: 1, slots: {}, layout: { top: { ...ok, x: 1.5 } } }), /layout\.top 数值无效/);
   assert.throws(() => validateOutfit({ id: 'o', createdAt: 1, slots: {}, layout: { top: { ...ok, z: 'a' } } }), /layout\.top 数值无效/);
 });
+
+test('自建一级分类按它的搭配位置放进槽位，它下面的自建二级跟着；没选位置的不进任何槽位', () => {
+  const rows = [
+    { id: 'u-swim', parentId: null, zh: '泳衣', builtin: false, hidden: false, slot: 'onepiece' },
+    { id: 'u-bikini', parentId: 'u-swim', zh: '比基尼', builtin: false, hidden: false },
+    { id: 'u-misc', parentId: null, zh: '杂物', builtin: false, hidden: false, slot: null },
+  ];
+  const items = [it('s1', 'u-swim', null), it('s2', 'u-swim', 'u-bikini'), it('m1', 'u-misc', null), ...ITEMS];
+  assert.deepEqual(itemsForSlot(getSlot('onepiece'), items, rows).map((i) => i.id), ['s1', 's2', 'dress', 'set']);
+  for (const s of SLOTS) assert.ok(!itemsForSlot(s, items, rows).some((i) => i.id === 'm1'), s.id);
+  assert.ok(!itemsForSlot(getSlot('onepiece'), items).some((i) => i.id === 's1')); // 不传分类表时不认
+  const t = taxonomyForSlot(getSlot('onepiece'), visibleTaxonomy(rows));
+  assert.deepEqual(t.map((c) => c.id), ['skirt', 'set', 'u-swim']);
+});

@@ -78,11 +78,12 @@ const toggle = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [.
 //   canSwitchCategory：false 时不显示左边栏，一级分类固定
 //   mode：'browse'（点衣物 = 打开）或 'single'（点衣物 = 选中，高亮 selectedId）
 //   onFilterChange(filter)、onSelect(item)
+//   labelFor(item)：衣物显示名（含已隐藏分类的改名）；不传时从 taxonomy 找
 //   images：thumbs.js createImageLoader() 的结果（按需加载缩略图）；不传时直接显示原图（测试用）
 // 返回 { setData(items, taxonomy), getFilter(), destroy() }。taxonomy 是 visibleTaxonomy() 的结果
 export function createPicker(container, {
   filter = null, initialCategory = null, canSwitchCategory = true, mode = 'browse', selectedId = null,
-  onFilterChange = () => {}, onSelect = () => {}, images = null,
+  onFilterChange = () => {}, onSelect = () => {}, images = null, labelFor = null,
 } = {}) {
   let f = filter ? { ...filter } : { ...emptyFilter(), categoryId: initialCategory };
   let items = [], taxonomy = [];
@@ -99,6 +100,7 @@ export function createPicker(container, {
 
   const set = (patch) => { f = { ...f, ...patch }; onFilterChange({ ...f }); render(); };
   const nameOf = (item) => {
+    if (labelFor) return labelFor(item);
     const c = taxonomy.find((x) => x.id === item.categoryId);
     return item.name || c?.subs.find((s) => s.id === item.subcategoryId)?.zh || c?.zh || item.categoryId;
   };
