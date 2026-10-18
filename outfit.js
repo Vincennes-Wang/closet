@@ -85,6 +85,15 @@ export function validateOutfit(o) {
     for (const k of Object.keys(slots)) if (!SLOT_IDS.includes(k)) errors.push(`未知槽位：${k}`);
     for (const k of SLOT_IDS) if (slots[k] != null && typeof slots[k] !== 'string') errors.push(`槽位 ${k} 必须是衣物 id 或 null`);
   }
+  // 手动排版（4e 写入，可选）：{ 槽位: { x, y, w, rotation, z } }，x、y、w 在 0–1
+  if (o?.layout != null) {
+    if (typeof o.layout !== 'object') errors.push('layout 必须是对象');
+    else for (const [k, p] of Object.entries(o.layout)) {
+      if (!SLOT_IDS.includes(k)) { errors.push(`layout 含未知槽位：${k}`); continue; }
+      const in01 = (v) => typeof v === 'number' && v >= 0 && v <= 1;
+      if (!p || !in01(p.x) || !in01(p.y) || !in01(p.w) || !Number.isFinite(p.rotation) || !Number.isFinite(p.z)) errors.push(`layout.${k} 数值无效`);
+    }
+  }
   if (errors.length) throw new Error(`搭配无效：${errors.join('；')}`);
   return { ...o, name: o.name ?? '', scenes: [...scenes], updatedAt: o.updatedAt ?? o.createdAt, slots: { ...emptySlots(), ...slots } };
 }

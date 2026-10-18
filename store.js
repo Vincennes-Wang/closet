@@ -11,7 +11,8 @@ const META = 'meta'; // 键值：job = 处理任务状态，device = 本设备�
 const CATS = 'categories'; // 用户自建分类，以及对内置分类的改名、隐藏（界面在阶段 4c）
 const OUTFITS = 'outfits'; // 搭配（v4），规则见 outfit.js
 const PLANS = 'plans'; // 下周穿搭计划（v4，界面在阶段 5）
-const THUMBS = 'thumbs'; // 衣物缩略图（v4），{ itemId, blob }，不进备份，缺了就重新生成
+const THUMBS = 'thumbs'; // 缩略图缓存（v4），不进备份，缺了就重新生成。键 itemId：
+// <衣物 id> = { itemId, blob } 衣物缩略图；bbox:<衣物 id> = { itemId, bbox, sig } 透明轮廓；outfit:<搭配 id> = { itemId, blob, sig } 搭配合成图（4d）
 
 // 队列记录的抠图状态。processing 只在处理那一张时出现；页面加载时还看到它，说明上次处理到这张时页面崩溃了
 export const QUEUE_STATUS = ['pending', 'processing', 'cutout_done', 'cutout_failed', 'skipped'];
@@ -171,18 +172,22 @@ export async function openStore(idbFactory = globalThis.indexedDB, { version = D
     },
     archive: (id) => update(id, { archived: true }),
     unarchive: (id) => update(id, { archived: false }),
-    // 删除衣物，同一个事务里删掉它的缩略图。搭配里保留它的 id（显示"已删除"）
+    // 删除衣物，同一个事务里删掉它的缩略图和轮廓。搭配里保留它的 id（显示"已删除"）
     async remove(id) {
       const t = db.transaction([STORE, THUMBS], 'readwrite');
       const done = new Promise((ok, fail) => { t.oncomplete = ok; t.onerror = () => fail(t.error); t.onabort = () => fail(t.error); });
       t.objectStore(STORE).delete(id);
       t.objectStore(THUMBS).delete(id);
+      t.objectStore(THUMBS).delete(`bbox:${id}`);
       await done;
     },
 
     // ---------- 缩略图（thumbs.js 用） ----------
     getThumb: async (itemId) => (await tx('readonly', (os) => req(os.get(itemId)), THUMBS))?.blob ?? null,
     putThumb: (itemId, blob) => tx('readwrite', (os) => req(os.put({ itemId, blob })), THUMBS),
+    // 缓存记录（轮廓、合成图），带 sig 判断是否过期
+    getCache: async (key) => (await tx('readonly', (os) => req(os.get(key)), THUMBS)) ?? null,
+    putCache: (key, value) => tx('readwrite', (os) => req(os.put({ ...value, itemId: key })), THUMBS),
 
     // ---------- 搭配、计划 ----------
     listOutfits: async () => (await tx('readonly', (os) => req(os.getAll()), OUTFITS)).sort((a, b) => b.updatedAt - a.updatedAt),
@@ -192,7 +197,14 @@ export async function openStore(idbFactory = globalThis.indexedDB, { version = D
       await tx('readwrite', (os) => req(os.put(o)), OUTFITS);
       return o;
     },
-    removeOutfit: (id) => tx('readwrite', (os) => req(os.delete(id)), OUTFITS),
+    // 删除搭配，同时删掉它的合成图
+    async removeOutfit(id) {
+      const t = db.transaction([OUTFITS, THUMBS], 'readwrite');
+      const done = new Promise((ok, fail) => { t.oncomplete = ok; t.onerror = () => fail(t.error); t.onabort = () => fail(t.error); });
+      t.objectStore(OUTFITS).delete(id);
+      t.objectStore(THUMBS).delete(`outfit:${id}`);
+      await done;
+    },
     listPlans: () => tx('readonly', (os) => req(os.getAll()), PLANS),
 
     // ---------- 抠图队列 ----------

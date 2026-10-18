@@ -83,3 +83,12 @@ test('validatePlan：日期 YYYY-MM-DD，outfitId 可为 null', () => {
   assert.equal(validatePlan({ id: 'p', createdAt: 1, date: '2026-10-19' }).outfitId, null);
   assert.throws(() => validatePlan({ id: 'p', createdAt: 1, date: '19/10' }), /日期格式/);
 });
+
+test('validateOutfit：可选的 layout（4e 手动排版）检查槽位名和数值范围', () => {
+  const ok = { x: 0.5, y: 0.3, w: 0.4, rotation: 0, z: 4 };
+  assert.deepEqual(validateOutfit({ id: 'o', createdAt: 1, slots: {}, layout: { top: ok } }).layout, { top: ok });
+  assert.equal(validateOutfit({ id: 'o', createdAt: 1, slots: {} }).layout, undefined);
+  assert.throws(() => validateOutfit({ id: 'o', createdAt: 1, slots: {}, layout: { hat: ok } }), /layout 含未知槽位：hat/);
+  assert.throws(() => validateOutfit({ id: 'o', createdAt: 1, slots: {}, layout: { top: { ...ok, x: 1.5 } } }), /layout\.top 数值无效/);
+  assert.throws(() => validateOutfit({ id: 'o', createdAt: 1, slots: {}, layout: { top: { ...ok, z: 'a' } } }), /layout\.top 数值无效/);
+});

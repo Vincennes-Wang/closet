@@ -1,11 +1,11 @@
 // 备份：导出 / 导入一个 ZIP（只存储、不压缩，自己写，不加依赖）。格式见 CLAUDE.md"备份"。
 // ZIP 内：manifest.json（衣物记录、分类表、搭配、计划，图片字段写成 ZIP 内文件名）+ images/<id>.<扩展名>（图片原始字节）
-// 版本：1 = 衣物 + 分类；2 = 再加搭配（outfits）和计划（plans）。导入两种都认
+// 版本：1 = 衣物 + 分类；2 = 再加搭配（outfits）和计划（plans）；3 = 搭配可带手动排版 layout（4d）。导入三种都认
 import { validate } from './store.js';
 import { validateOutfit, validatePlan } from './outfit.js';
 
-export const FORMAT_VERSION = 2;
-const READABLE = [1, 2];
+export const FORMAT_VERSION = 3;
+const READABLE = [1, 2, 3];
 const EXT = { 'image/webp': 'webp', 'image/png': 'png', 'image/jpeg': 'jpg' };
 const TYPE = Object.fromEntries(Object.entries(EXT).map(([t, e]) => [e, t]));
 // 衣物记录导出的字段（store.js newItem 的全部字段）。改了衣物字段要同时改这里，并把 FORMAT_VERSION 加 1

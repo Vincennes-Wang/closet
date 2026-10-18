@@ -129,11 +129,14 @@ body.fatal main > :not(#fatal) { display: none; }
 
 /* 搭配列表 */
 .wide { display: block; width: 100%; padding: 12px; font-size: 16px; font-weight: 600; margin-bottom: 12px; }
-.outfit-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.outfit-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
 .outfit-card { display: grid; gap: 6px; text-align: left; padding: 10px; border-radius: 14px; }
 .outfit-name { font-weight: 600; font-size: 16px; }
-.outfit-slots { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 4px; }
-.outfit-slot img, .outfit-slot .slot-missing, .slot-img img, .slot-img .slot-missing { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 8px; display: grid; place-items: center; }
+/* 合成图 3:4（4d），图片加载前也占好位置 */
+.outfit-img { width: 100%; aspect-ratio: 3 / 4; object-fit: contain; border-radius: 10px; background: #fff; border: 1px solid var(--line); }
+.outfit-missing { font-size: 13px; color: var(--danger); }
+.outfit-preview { display: block; width: min(240px, 70%); aspect-ratio: 3 / 4; margin: 10px auto 0; border-radius: 12px; border: 1px solid var(--line); background: #fff; }
+.slot-img img, .slot-img .slot-missing { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 8px; display: grid; place-items: center; }
 .slot-missing { background: var(--bg); color: var(--danger); font-size: 12px; }
 .slot-missing.empty { color: var(--muted); }
 /* 搭配编辑：每个槽位一行 */

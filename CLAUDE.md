@@ -153,6 +153,15 @@
 - 缩略图：网格、搭配卡片、槽位都用 `thumbs.js` `createImageLoader`（IntersectionObserver，提前 300 px；离开视口释放 object URL）。缩略图长边 `THUMB_SIDE`，存 `thumbs` 表，没有就用原图生成；删除衣物时同一事务删缩略图。编辑弹窗大图仍用原图。4a 网格用原图：40 件 1024 图解码约 160 MB，改后 2.5–4.5 MB（`node tools/memory.mjs <旧版目录>`）。Mac Safari 标签页内存（活动监视器，40 件 + 20 套）：衣橱 97.2 MB，搭配页 97.5 MB（2026-10-15 用户实测）。
 - 测试数据页 `tests/seed.html?items=40&outfits=20`：只在本机测试服务器上用，会清空该网址的数据库。
 
+### 阶段 4d 搭配自动排版（2026-10-18）
+- `layout.js`（纯函数）：画板 3:4，坐标 0–1。`REGIONS` 是各槽位区域和层次 z（外套偏左、在上衣后面；上衣盖住裤腰；包、配饰在右侧；鞋在底部）。连衣裙 / 套装和上衣同时有时上衣在前（披在外面），和下装同时有时下装在后（打底）。改了区域表要把 `LAYOUT_VERSION` 加 1。`alphaBBox` 求透明轮廓（alpha > 16）。
+- 位置 `{ x, y, w, rotation, z }`：x、y 是中心点，w 相对画板宽，高按轮廓宽高比算。`outfit.layout` 是可选字段（4e 手动排版写入），有就优先用。4d 不写。
+- 缓存都在 `thumbs` 表，不升数据库版本：`bbox:<衣物 id>`（轮廓，用 256 缩略图算）、`outfit:<搭配 id>`（450×600 JPEG 合成图）。`sig` 包含排版版本、layout、每个槽位的衣物 id、状态和图片指纹（size、type、hasAlpha），不一致就重新生成。删衣物时删缩略图和轮廓，删搭配时删合成图。
+- 搭配列表每套只显示合成图（已删除、已归档不画，卡片写"N 件已删除"）；编辑弹窗槽位上方有实时预览（不写缓存）。
+- 备份 `formatVersion: 3`：搭配可带 `layout`；导入认 1、2、3。缓存不进备份。
+- 截图：`node tools/shots.mjs <目录>` 会用 `private/cutouts` 的真实抠图组 3 套搭配（样本里没有鞋、半身裙、包，用画出来的轮廓代替）。
+- 图片解码大小（Chrome，40 件 + 20 套，`tools/memory.mjs`）：搭配页从 4b 的 7.5–13.8 MB 变为 6.2–12.4 MB（每套 1 张 450×600，代替最多 7 张 256 小图）。
+
 ### 配色（2026-10-11）
 - 阿根廷蓝白：`style.css` 顶部的变量。天蓝 `#74acdf` 用于国旗条和选中状态（配墨蓝字）；深蓝 `#1f5a8e` 用于操作按钮（白字）；金色 `#f6b40e` 只用在页头的五月太阳。页头是简化国旗（上下天蓝条 + 白底）。
 - 图标是白色衣架 + 天蓝底。iPhone 主屏幕图标要删掉后重新"添加到主屏幕"才会更新。
@@ -168,7 +177,7 @@
 | 标签向量 | `label-embeddings.json`（根目录，应用用） | – | `node tools/embed.mjs` 用 fashionSigLIP fp32 文本模型生成，内容来自 `taxonomy.js`。改了英文 prompt 必须重新生成，测试会检查。`spike/label-embeddings.json` 只给 spike 用 |
 
 ## 目录
-- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`backup.js` 备份 ZIP、`picker.js` 衣物选择器、`outfit.js` 搭配规则、`thumbs.js` 缩略图按需加载、`check.html` 网络检查、`sw.js`、`manifest.webmanifest`、`icons/`）。
+- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`backup.js` 备份 ZIP、`picker.js` 衣物选择器、`outfit.js` 搭配规则、`thumbs.js` 缩略图按需加载和搭配合成图、`layout.js` 搭配自动排版、`check.html` 网络检查、`sw.js`、`manifest.webmanifest`、`icons/`）。
 - `vendor/`：第三方库（transformers.js、ONNX Runtime），见 `vendor/README.md`。
 - `docs/HISTORY.md`：PROGRESS.md 移出的旧记录。
 - `tests/`：`node --test tests/*.test.mjs`。`store.test.mjs` 测纯函数；`browser.test.mjs` 用 headless Chrome（CDP，`tests/cdp.mjs`，无依赖）测真实 IndexedDB、录入流程、抠图队列（假模型）和离线打开。模拟崩溃用"处理中直接重新打开页面"，不用 CDP `Page.crash`（装了 Service Worker 后崩溃后的导航不返回）。需要本机装有 Chrome。

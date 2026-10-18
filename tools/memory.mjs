@@ -45,5 +45,5 @@ async function measure(root, label, pages) {
   } finally { await chrome.close(); server.close(); }
 }
 
-if (arg) await measure(arg, '旧版（4a）', ['']);
-await measure(undefined, '新版（4b）', ['', '#v=outfits']);
+if (arg) await measure(arg, '旧版', ['', '#v=outfits']);
+await measure(undefined, '新版', ['', '#v=outfits']);

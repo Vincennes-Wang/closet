@@ -254,17 +254,19 @@ function slotThumb(id, byId) {
 async function renderOutfits() {
   const [outfits, all] = await Promise.all([store.listOutfits(), store.list({ includeArchived: true })]);
   const byId = new Map(all.map((i) => [i.id, i]));
+  // 每套一张合成图（thumbs.js，按需生成并缓存）；已删除、已归档的衣物不画，另起一行写明
   const cards = outfits.map((o) => {
-    const filled = SLOTS.filter((s) => o.slots[s.id]);
     const seasons = outfitSeasons(o, byId);
+    const counts = {};
+    for (const s of SLOTS) { const st = slotState(o.slots[s.id], byId); if (STATE_TEXT[st]) counts[st] = (counts[st] ?? 0) + 1; }
+    const missing = Object.entries(counts).map(([st, n]) => `${n} 件${STATE_TEXT[st]}`).join('，');
+    const img = el('img', { className: 'outfit-img', alt: o.name || '搭配' });
+    images.observeOutfit(img, o, byId);
     const card = el('button', { type: 'button', className: 'outfit-card', onclick: () => openOutfit(o) },
       el('span', { className: 'outfit-name', textContent: o.name || '未命名搭配' }),
       el('span', { className: 'muted', textContent: [o.scenes.join('、'), seasons.join('')].filter(Boolean).join(' · ') || ' ' }),
-      el('span', { className: 'outfit-slots' }, ...filled.map((s) => {
-        const cell = el('span', { className: 'outfit-slot', title: s.zh }, slotThumb(o.slots[s.id], byId));
-        cell.dataset.slot = s.id;
-        return cell;
-      })));
+      img,
+      missing ? el('span', { className: 'outfit-missing', textContent: missing }) : '');
     card.dataset.id = o.id;
     return card;
   });
@@ -301,10 +303,13 @@ async function openOutfit(saved) {
       row.dataset.slot = slot.id;
       return row;
     });
+    // 实时预览：每次改槽位都会重建编辑视图，预览跟着重画（不写缓存）
+    const preview = el('canvas', { className: 'outfit-preview' });
     $('editForm').replaceChildren(
       el('h2', { textContent: saved ? '编辑搭配' : '新建搭配' }),
       el('label', { className: 'field' }, el('span', { textContent: '名称' }), name),
       el('div', { className: 'field' }, el('span', { textContent: '场景' }), scenes),
+      preview,
       el('div', { className: 'slots' }, ...slotRows),
       msg,
       el('div', { className: 'actions' },
@@ -312,6 +317,9 @@ async function openOutfit(saved) {
         saved ? el('button', { type: 'button', className: 'danger', textContent: '删除搭配', onclick: remove }) : '',
         el('button', { type: 'button', textContent: '取消', onclick: close })));
     images.sweep();
+    images.preview(preview, draft, byId)
+      .then((n) => { preview.dataset.drawn = String(n); })
+      .catch((err) => console.warn('预览失败', err));
   }
 
   function pickFor(slot) {
