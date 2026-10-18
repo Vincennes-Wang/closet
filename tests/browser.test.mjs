@@ -85,8 +85,10 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
   assert.equal(await chrome.evaluate(statuses), '待处理'); // 透明 PNG 已算抠图完成，只有 JPEG 待处理
   // 2 张都要分类，1 张要抠图
   await chrome.evaluate(clickButton('#queue', '开始处理（2 张）'));
-  await chrome.waitFor(`document.getElementById('lastJob')?.textContent.startsWith('上次抠图：成功 2，失败 0')`, 20000); // 透明 PNG 也算在本次任务里（要分类），算抠图成功
-  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /分类 2 张，失败 0$/);
+  await chrome.waitFor(`document.getElementById('jobStats')?.textContent.startsWith('上次抠图：成功 2，失败 0')`, 20000); // 透明 PNG 也算在本次任务里（要分类），算抠图成功
+  assert.match(await chrome.evaluate(`document.getElementById('jobStats').textContent`), /分类 2 张，失败 0$/);
+  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /^上次处理：抠图 2 张，用时 \d+ 分 \d+ 秒$/);
+  assert.equal(await chrome.evaluate(`document.getElementById('noMatting')`), null); // 抠图模型正常时不显示系统抠图说明
 
   // 待确认卡片。假分类按标签顺序打分：休闲短袖、运动短袖、长袖线衣
   const card = (i) => `document.querySelectorAll('#queue .review')[${i}]`;
@@ -158,7 +160,7 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
   await chrome.evaluate(`document.getElementById('archivedBtn').click()`);
   await chrome.waitFor(`document.querySelectorAll('#archived .tile').length === 1`);
 
-  // 存储状态和 WebP 检测已显示
+  // 存储状态已显示
   // 照片占用按衣物图片大小加总（不用 storage.estimate()）
   const storage = await chrome.evaluate(`document.getElementById('storage').textContent`);
   assert.match(storage, /^(数据不会被自动清除|空间不足时浏览器可能清除数据，请定期备份) · 照片占用 \d+\.\d MB$/);
@@ -168,7 +170,7 @@ test('应用：选图进队列（透明 PNG 直接算已抠图），抠图后录
     return (all.reduce((n, i) => n + i.image.size, 0) / 1024 / 1024).toFixed(1);
   })()`);
   assert.ok(storage.endsWith(`照片占用 ${expectedMb} MB`), storage);
-  assert.equal(await chrome.evaluate(`document.getElementById('diag').textContent`), '透明图保存为 WebP');
+  assert.equal(await chrome.evaluate(`document.getElementById('diag')`), null); // 阶段 6 删除了存图格式诊断
 
   // 离线：Service Worker 接管后断网刷新，页面仍能显示衣橱
   await chrome.waitFor(`navigator.serviceWorker.controller !== null`);
@@ -301,7 +303,7 @@ test('抠图队列：每次加载抠 2 张后自动刷新；处理中崩溃重�
   assert.equal(st.job.recoveries, 2);
   assert.equal(st.job.reloads, 3); // 每次加载 1 张：崩溃后第 2 张 → 刷新 → 第 3 张 → 刷新 → 第 4 张 → 刷新 → 第 5 张 → 进入分类
   assert.equal(st.job.running, false);
-  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /成功 4，失败 1，未抠图 0 · 自动刷新 3 次 · 崩溃恢复 2 次/);
+  assert.match(await chrome.evaluate(`document.getElementById('jobStats').textContent`), /成功 4，失败 1，未抠图 0 · 自动刷新 3 次 · 崩溃恢复 2 次/);
   // 抠图失败的那张：提示用照片 App 抠图，没有"用原图"开关
   assert.match(await chrome.evaluate(`document.querySelector('#queue .review .hint').textContent`), /^抠图失败，将保存原图。也可以用照片 App 抠图/);
   assert.equal(await chrome.evaluate(`document.querySelectorAll('#queue .review .toggle-inline').length`), 4);
@@ -496,11 +498,14 @@ test('模型地址：抠图模型下载不了时跳过抠图、保留原图，�
     return q.map((r) => r.classify.status);
   })()`);
   assert.deepEqual(classified, ['done', 'done']);
-  const last = await chrome.evaluate(`document.getElementById('lastJob').textContent`);
+  const last = await chrome.evaluate(`document.getElementById('jobStats').textContent`);
   assert.match(last, /成功 0，失败 0，未抠图 2/);
   assert.match(last, / · 分类模型 vincennes-wang\.github\.io/);
   assert.match(await chrome.evaluate(`document.querySelector('#queue .timeline pre').textContent`), /抠图模型下载不了，跳过抠图，保留原图/);
-  assert.match(await chrome.evaluate(`document.querySelector('#queue .review .hint').textContent`), /^没有抠图，将保存原图/);
+  // 阶段 6：列表顶部一张系统抠图说明；卡片里只写一句；对用户的"上次处理"不含诊断数字
+  assert.match(await chrome.evaluate(`document.getElementById('noMatting')?.textContent ?? ''`), /^这次没有抠图：抠图模型下载不了.*长按衣服.*"共享" → "保存图像"/);
+  assert.deepEqual(await chrome.evaluate(`[...document.querySelectorAll('#queue .review .hint')].map((h) => h.textContent)`), ['没有抠图，将保存原图', '没有抠图，将保存原图']);
+  assert.match(await chrome.evaluate(`document.getElementById('lastJob').textContent`), /^上次处理：抠图 0 张，未抠图 2 张，用时 \d+ 分 \d+ 秒$/);
 });
 
 test('模型地址：closet-models 下载不了时，分类改用 huggingface.co', async () => {

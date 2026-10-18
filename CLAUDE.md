@@ -106,7 +106,7 @@
 - 详细测试记录见 `docs/HISTORY.md`。
 
 ### 阶段 1 决策（2026-10-11）
-- 图片存储格式：长边缩到 1024，不存原图。有透明区域的图存 WebP；浏览器不能输出带透明的 WebP 时存 PNG。没有透明区域的图存 JPEG 0.9。启动时用 `image.js` 的 `probeWebpAlpha()` 检测，结果显示在页面"关于"区。
+- 图片存储格式：长边缩到 1024，不存原图。有透明区域的图存 WebP；浏览器不能输出带透明的 WebP 时存 PNG。没有透明区域的图存 JPEG 0.9。存图时用 `image.js` 的 `probeWebpAlpha()` 检测（阶段 6 起不再显示在"关于"区）。
 - WebP 透明实测：Mac Chrome 155 可以；Mac Safari 27.0.1 不可以（`toBlob('image/webp')` 返回 `image/png`），所以 Safari 上透明图存 PNG。iPhone（iOS 27，2026-10-11 真机）：同样返回 `image/png`，透明图存 PNG。
 - 衣物记录字段见 `store.js` 的 `newItem()`：分类只存 `categoryId`、`subcategoryId`（来自 `taxonomy.js`），季节、场景的取值在 `options.js`。改了取值要考虑已存数据。
 - `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v4：`items` 衣物、`queue` 待确认照片、`meta` 任务状态 `job` 和本设备设置 `device`、`categories` 自建分类和改名/隐藏、`outfits` 搭配、`plans` 计划（阶段 5，每个日期一条）、`thumbs` 缩略图）。改表结构必须升版本号并写迁移。例外：v1 → v2、v2 → v3 经用户确认直接清空，不迁移。
@@ -182,6 +182,12 @@
 - `week.js`：`weekDates`（用年月日分量算，避开夏令时）、`parseForecast`、`seasonsForTemp`（最高温 ≥ 24 夏、< 12 冬、其余春秋）、`rankOutfits`（适合 / 没季节信息 / 不合适，不隐藏）、`loadWeather`。缓存 `meta.device.weather = { fetchedAt, days }`（本机，不导出），3 小时内直接用；失败时用旧缓存并写"天气更新于…"，没缓存写"天气获取失败，计划照常可用"。失败后本页面 3 小时内不再重试（防止每次重画都请求）。测试 `?fakeWeather=1` / `?fakeWeather=fail`。
 - 计划每个日期最多一条（`store.setPlan(date, outfitId)`，null 删除；`plansBetween(from, to)`）。删除搭配前提示"排在 N 天的计划里"，计划保留 outfitId，那天显示"搭配已删除"。数据库、备份格式不变（plans 从 v2 起已导出）。
 - 截图：`node tools/shots.mjs <目录>` 的真实抠图部分加了 `390-real-week`、`1280-real-week`、`390-real-day`（下周一、二、四各排一套，假天气）。
+
+### 阶段 6 交付（2026-10-18）
+- 主界面只留给用户看的信息：处理中 `#progress` 只写张数和剩余时间；待确认 `#lastJob` 写"上次处理：抠图 N 张，未抠图 M 张，用时…"。完整统计（失败、自动刷新、崩溃恢复、后端、分类模型域名）在折叠的"详细记录"第一行 `#jobStats`，下面是事件时间线；测试从 `#jobStats` 读这些数字。
+- "关于"删掉存图格式诊断（`#diag`），保留版本号（`showVersion`）和网络检查链接。
+- 本次任务有 `mattingUnavailable` 事件（抠图模型下载不了）时，待确认列表顶部显示系统抠图说明 `#noMatting`（`app.js` `noMattingCard`），卡片里只写"没有抠图，将保存原图"。抠图失败（崩溃）的卡片仍带单张提示。
+- `README.md` 有中文说明和第三方许可表。
 
 ### 配色（2026-10-11）
 - 阿根廷蓝白：`style.css` 顶部的变量。天蓝 `#74acdf` 用于国旗条和选中状态（配墨蓝字）；深蓝 `#1f5a8e` 用于操作按钮（白字）；金色 `#f6b40e` 只用在页头的五月太阳。页头是简化国旗（上下天蓝条 + 白底）。

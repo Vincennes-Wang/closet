@@ -5,7 +5,7 @@ import { openStore, groupByCategory } from './store.js';
 import { SLOTS, getSlot, itemsForSlot, taxonomyForSlot, slotState, outfitError, outfitSeasons, outfitsUsing, emptySlots } from './outfit.js';
 import { createImageLoader } from './thumbs.js';
 import { hitTest, moveBy, setSize, setRotation, shiftLayer, resetSlot } from './layout.js';
-import { prepareImage, probeWebpAlpha, makeThumb } from './image.js';
+import { prepareImage, makeThumb } from './image.js';
 import { THUMB_SIDE, RESULTS_DELAY_MS, WEATHER } from './config.js';
 import { buildBackup, parseBackup } from './backup.js';
 import { ymd, weekDates, dayLabel, seasonsForTemp, weatherIcon, rankOutfits, upcomingPlansUsing, loadWeather } from './week.js';
@@ -664,12 +664,25 @@ const fakeEmptyMask = new URLSearchParams(location.search).has('fakeEmptyMask');
 const fakeHostFail = new URLSearchParams(location.search).get('fakeHostFail') ?? ''; // 测试用：模拟这个模型地址网络失败
 const qurls = new Set();
 const duration = (ms) => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)} 分 ${s % 60} 秒`; };
-const progressText = (p) => `${p.phase === 'classify' ? `分类 ${p.classifyProcessed} / ${p.total}（失败 ${p.classifyFailed}）` : `抠图 ${p.processed} / ${p.total}（失败 ${p.failed}）`} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}`;
+// 处理中给用户看的进度（阶段 6 起只留张数）；完整数字（失败、自动刷新、崩溃恢复、用时）在"详细记录"里
+const progressText = (p) => (p.phase === 'classify' ? `分类 ${p.classifyProcessed} / ${p.total}` : `抠图 ${p.processed} / ${p.total}`);
+const progressStats = (p) => `${p.phase === 'classify' ? `分类 ${p.classifyProcessed} / ${p.total}（失败 ${p.classifyFailed}）` : `抠图 ${p.processed} / ${p.total}（失败 ${p.failed}）`} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}`;
+const lastJobStats = (p) => `上次抠图：成功 ${p.done}，失败 ${p.failed}，未抠图 ${p.skipped} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}${p.backend ? ` · ${p.backend}` : ''}${p.classifyHost ? ` · 分类模型 ${p.classifyHost}` : ''} · 分类 ${p.classified} 张，失败 ${p.classifyFailed}`;
 
-// 可展开的事件时间线（诊断用）
-const timeline = (job) => (job?.events?.length
-  ? el('details', { className: 'timeline' }, el('summary', { textContent: '详细记录' }), el('pre', { textContent: eventLines(job).join('\n') }))
+// 可展开的"详细记录"（诊断用，出问题时让用户截图）：第一行完整统计（#jobStats），下面是事件时间线
+const timeline = (job, stats) => (job?.events?.length
+  ? el('details', { className: 'timeline' }, el('summary', { textContent: '详细记录' }),
+    el('p', { className: 'muted', id: 'jobStats', textContent: stats }), el('pre', { textContent: eventLines(job).join('\n') }))
   : '');
+
+// 抠图模型下载不了（中国大陆打不开 huggingface.co）时，待确认列表顶部的说明：怎样用 iPhone 系统抠图
+const noMattingCard = () => el('div', { className: 'hint', id: 'noMatting' },
+  el('p', {}, el('b', { textContent: '这次没有抠图：' }), '抠图模型下载不了（中国大陆网络常见）。照片按原图保存，可以照常录入。'),
+  el('p', { textContent: '想要透明背景，可以用 iPhone 自带的抠图：' }),
+  el('ol', {}, el('li', { textContent: '在"照片"里打开这张衣服照片，长按衣服，等它浮起来' }),
+    el('li', { textContent: '点"共享" → "保存图像"' }),
+    el('li', { textContent: '回到这里点"录入衣物"，选新保存的那张（会自动识别为已抠图）' })),
+  el('p', { textContent: '安卓手机可以用别的抠图 App 存成透明 PNG 再录入。' }));
 
 function queueButton(label, fn, cls = '') {
   return el('button', { type: 'button', className: cls, textContent: label, onclick: fn });
@@ -691,7 +704,7 @@ async function renderQueue() {
       job.paused ? '' : el('p', { className: 'hint', textContent: '处理中请保持页面在前台，屏幕不要锁定。页面会自动刷新，不用操作。如果出现"重复出现问题"，向左划回来即可继续。' }),
       !job.paused && job.events?.at(-1)?.e === 'loadWait' ? el('p', { className: 'muted', textContent: '正在释放内存，稍后继续…' }) : '',
       el('p', { className: 'error', textContent: job.error ?? '' }),
-      job.paused ? timeline(job) : '',
+      job.paused ? timeline(job, progressStats(p)) : '',
       el('div', { className: 'actions' },
         job.paused
           ? queueButton('继续', async () => { await continueJob(store); location.reload(); }, 'primary')
@@ -703,7 +716,8 @@ async function renderQueue() {
   const p = job?.endedAt ? summarize(job, queue) : null;
   // 开始前按本设备后端估算用时；只在 WASM（慢）时提示
   const backend = waiting ? await guessBackend(store) : null;
-  const cards = queue.map(reviewCard);
+  const noMatting = !!p && job.events?.some((v) => v.e === 'mattingUnavailable');
+  const cards = queue.map((r) => reviewCard(r, noMatting));
   const ready = () => cards.filter((c) => c.choice());
   // 全部确认：只确认已有分类的；没有分类建议、又没手动选的留在列表里
   const confirmAll = queueButton('全部确认', async () => {
@@ -717,8 +731,9 @@ async function renderQueue() {
   }, 'primary');
   box.replaceChildren(...(queue.length ? [el('section', { className: 'card' },
     el('h2', { textContent: `待确认 · ${queue.length}` }),
-    p ? el('p', { className: 'muted', id: 'lastJob', textContent: `上次抠图：成功 ${p.done}，失败 ${p.failed}，未抠图 ${p.skipped} · 自动刷新 ${p.reloads} 次 · 崩溃恢复 ${p.recoveries} 次 · 用时 ${duration(p.elapsedMs)}${p.backend ? ` · ${p.backend}` : ''}${p.classifyHost ? ` · 分类模型 ${p.classifyHost}` : ''} · 分类 ${p.classified} 张，失败 ${p.classifyFailed}` }) : '',
-    p ? timeline(job) : '',
+    p ? el('p', { className: 'muted', id: 'lastJob', textContent: `上次处理：抠图 ${p.done} 张${p.skipped ? `，未抠图 ${p.skipped} 张` : ''}${p.failed ? `，抠图失败 ${p.failed} 张` : ''}，用时 ${duration(p.elapsedMs)}` }) : '',
+    noMatting ? noMattingCard() : '',
+    p ? timeline(job, lastJobStats(p)) : '',
     backend === 'wasm' ? el('p', { className: 'hint', id: 'slowHint',
       textContent: `这台设备处理较慢，${waiting} 张约需 ${minutesText(Math.max(60000, estimateMs(waiting, backend)))}，处理中请保持本页面打开` }) : '',
     waiting ? el('div', { className: 'actions' },
@@ -729,7 +744,8 @@ async function renderQueue() {
 
 // 待确认卡片：缩略图（可看原图）、建议分类 + 另外 2 个候选、其他分类、季节、"用原图"、确认 / 删除。
 // 返回 { node, choice()（当前选的分类，没选为 null）, confirm(), showError() }
-function reviewCard(r) {
+// noMatting：本次抠图模型下载不了，列表顶部已有系统抠图说明，卡片里只写一句
+function reviewCard(r, noMatting = false) {
   const thumbUrl = URL.createObjectURL(r.thumb ?? r.cutout ?? r.original); qurls.add(thumbUrl);
   const cut = r.status === 'cutout_done';
   const node = el('article', { className: 'review' });
@@ -798,7 +814,7 @@ function reviewCard(r) {
   const orig = cut && !r.hasAlpha ? el('label', { className: 'toggle-inline' },
     Object.assign(el('input', { type: 'checkbox' }), { onchange: (e) => { useOriginal = e.target.checked; } }), ' 用原图') : '';
   const hint = r.status === 'cutout_failed' || r.status === 'skipped'
-    ? el('p', { className: 'hint', textContent: `${r.status === 'skipped' ? '没有抠图' : '抠图失败'}，将保存原图。也可以用照片 App 抠图（长按衣服 → 共享 → 保存图像）后重新上传。` })
+    ? el('p', { className: 'hint', textContent: `${r.status === 'skipped' ? '没有抠图' : '抠图失败'}，将保存原图${noMatting && r.status === 'skipped' ? '' : '。也可以用照片 App 抠图（长按衣服 → 共享 → 保存图像）后重新上传。'}` })
     : '';
   const noGuess = !top3.length ? el('p', { className: 'muted', textContent: '没有分类建议，请点"其他分类"手动选择' }) : '';
 
@@ -908,12 +924,10 @@ $('importInput').addEventListener('change', async (e) => {
   } catch (err) { backupMsg(`导入失败：${err.message}`); } finally { e.target.value = ''; }
 });
 
-// 测试辅助，交付前视情况删除
-async function showDiag() {
+// "关于"区显示当前版本（Service Worker 缓存名），验收和排查问题时看
+async function showVersion() {
   const version = (await globalThis.caches?.keys().catch(() => []) ?? []).find((k) => /^closet-v\d+$/.test(k));
   $('version').textContent = `版本 ${version ?? '未知（还没有离线缓存）'}`;
-  const w = await probeWebpAlpha();
-  $('diag').textContent = w.ok ? '透明图保存为 WebP' : '透明图保存为 PNG（这台设备的浏览器不能保存带透明的 WebP）';
 }
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Service Worker 注册失败', err));
@@ -935,7 +949,7 @@ if (!job?.running) {
     .then(() => noteResultsShown(store));
 }
 document.documentElement.dataset.ready = '1'; // 事件已绑定、衣橱已渲染（测试等这个标记）
-showDiag();
+showVersion();
 if (job?.running) {
   const result = await resumeQueue(store, { fake: fake === null ? null : Number(fake), fakeEmptyMask, fakeHostFail, onChange: renderQueue });
   if (result !== 'reloading') { await renderQueue(); if (result !== 'paused') await render(); }
