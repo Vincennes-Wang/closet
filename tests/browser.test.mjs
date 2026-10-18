@@ -1235,3 +1235,97 @@ test('分类管理：隐藏的内置分类不出现在 AI 建议里，第一名�
   assert.equal(await chrome.evaluate(`document.querySelector('#queue .review .choice').textContent`), '休闲短袖');
   assert.deepEqual(await chrome.evaluate(`[...document.querySelectorAll('#queue .review .chips')[0].querySelectorAll('.chip')].map((b) => b.textContent)`), ['休闲短袖 10%', '背心 5%']);
 });
+
+test('下周穿搭：天气（假数据）、按天气排序、给两天排搭配、刷新后还在、改、清空；删除搭配先提示天数，那天显示"搭配已删除"；天气失败时计划照常', async () => {
+  await resetDb();
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  const ids = await chrome.evaluate(`(async () => {
+    const { openStore } = await import('/store.js');
+    const s = await openStore();
+    const add = async (categoryId, subcategoryId, seasons, name) => {
+      const c = new OffscreenCanvas(600, 400); c.getContext('2d').fillRect(100, 100, 300, 200);
+      return (await s.add({ image: await c.convertToBlob({ type: 'image/png' }), hasAlpha: true, categoryId, subcategoryId, seasons, scenes: [], name })).id;
+    };
+    const shirt = await add('top', 'top.shirt', ['春', '秋'], '衬衫'), jeans = await add('bottom', 'bottom.jeans', ['春', '秋', '冬'], '牛仔裤');
+    const tee = await add('top', 'top.casual_tee', ['夏'], 'T恤'), shorts = await add('bottom', 'bottom.shorts', ['夏'], '短裤');
+    const slots = (top, bottom) => ({ outer: null, top, onepiece: null, bottom, shoes: null, bag: null, accessory: null });
+    const autumn = (await s.putOutfit({ name: '秋天', scenes: [], slots: slots(shirt, jeans) }, { now: 1 })).id;
+    const summer = (await s.putOutfit({ name: '夏天', scenes: [], slots: slots(tee, shorts) }, { now: 2 })).id;
+    s.close();
+    return { autumn, summer };
+  })()`);
+  await chrome.goto(`${server.origin}/?fakeWeather=1#v=week`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1' && document.querySelectorAll('#weekList .day').length === 7`);
+  // 默认下周，周一开始；天气到了之后显示温度
+  const W = await chrome.evaluate(`(async () => { const w = await import('/week.js'); const now = new Date();
+    const hot = w.ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2));
+    return { today: w.ymd(now), thisWeek: w.weekDates(now, 0), next: w.weekDates(now, 1), hot }; })()`);
+  assert.deepEqual(await chrome.evaluate(`[...document.querySelectorAll('#weekList .day')].map((d) => d.dataset.date)`), W.next);
+  await chrome.waitFor(`document.querySelector('#weekList .day[data-date="${W.next[0]}"] .day-weather').textContent.includes('°')`);
+  const dayRow = (date) => `document.querySelector('#weekList .day[data-date="${date}"]')`;
+  const cardNames = `[...document.querySelectorAll('#editForm .outfit-card')].map((c) => (c.querySelector('.fit-tag')?.textContent ?? '') + c.querySelector('.outfit-name').textContent + (c.classList.contains('unfit') ? '(淡)' : ''))`;
+
+  // 热的那天（26°）：夏天搭配排前面，秋天变淡
+  if (!W.next.includes(W.hot)) { await chrome.evaluate(clickText('#weekNav', '本周')); await chrome.waitFor(`${dayRow(W.hot)}`); }
+  await chrome.evaluate(`${dayRow(W.hot)}.click()`);
+  await chrome.waitFor(`document.getElementById('editDialog').open && document.querySelectorAll('#editForm .outfit-card').length === 2`);
+  assert.deepEqual(await chrome.evaluate(cardNames), ['适合夏天', '秋天(淡)']);
+  await chrome.evaluate(clickText('#editForm', '取消'));
+  await chrome.evaluate(clickText('#weekNav', '下周'));
+  await chrome.waitFor(`${dayRow(W.next[0])}`);
+
+  // 下周一（14°，春秋）：秋天在前
+  const chooseFor = async (date, name) => {
+    await chrome.waitFor(`${dayRow(date)} && !document.getElementById('editDialog').open`);
+    await chrome.evaluate(`${dayRow(date)}.click()`);
+    await chrome.waitFor(`document.getElementById('editDialog').open && document.querySelectorAll('#editForm .outfit-card').length === 2`);
+    const names = await chrome.evaluate(cardNames);
+    await chrome.evaluate(`[...document.querySelectorAll('#editForm .outfit-card')].find((c) => c.querySelector('.outfit-name').textContent === '${name}').click()`);
+    await chrome.waitFor(`!document.getElementById('editDialog').open`);
+    return names;
+  };
+  const monNames = await chooseFor(W.next[0], '秋天');
+  if (W.next[0] !== W.hot) assert.deepEqual(monNames, ['适合秋天', '夏天(淡)']);
+  await chooseFor(W.next[2], '夏天');
+  await chrome.waitFor(`${dayRow(W.next[0])}.querySelector('.day-name')?.textContent === '秋天' && ${dayRow(W.next[2])}.querySelector('.day-name')?.textContent === '夏天'`);
+
+  // 刷新后还在（仍是下周）
+  await chrome.reload();
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1' && ${dayRow(W.next[0])}?.querySelector('.day-outfit img')`);
+  assert.equal(await chrome.evaluate(`${dayRow(W.next[2])}.querySelector('.day-name').textContent`), '夏天');
+  // 改：周一换成夏天，仍是一条记录；清空周三
+  await chooseFor(W.next[0], '夏天');
+  await chrome.evaluate(`${dayRow(W.next[2])}.click()`);
+  await chrome.waitFor(`document.getElementById('editDialog').open`);
+  assert.equal(await chrome.evaluate(`document.querySelector('#editForm .outfit-card[aria-pressed="true"] .outfit-name').textContent`), '夏天');
+  await chrome.evaluate(clickText('#editForm', '清空这天'));
+  await chrome.waitFor(`!document.getElementById('editDialog').open && ${dayRow(W.next[2])}.querySelector('.day-empty')?.textContent === '选搭配'`);
+  const plans = await chrome.evaluate(storeCall(`s.listPlans()`));
+  assert.deepEqual(plans.map((p) => [p.date, p.outfitId]), [[W.next[0], ids.summer]]);
+
+  // 过去的日子不能点
+  await chrome.evaluate(clickText('#weekNav', '本周'));
+  await chrome.waitFor(`${dayRow(W.thisWeek[0])}`);
+  assert.equal(await chrome.evaluate(`document.querySelectorAll('#weekList .day:disabled').length`), W.thisWeek.filter((d) => d < W.today).length);
+
+  // 删除夏天：提示排在 1 天里；周一显示"搭配已删除"
+  await chrome.evaluate(`window.confirm = (m) => { window.__confirm = m; return true; }`);
+  await chrome.evaluate(clickText('#views', '搭配'));
+  await chrome.waitFor(`document.querySelectorAll('#outfitList .outfit-card').length === 2`);
+  await chrome.evaluate(`document.querySelector('#outfitList .outfit-card[data-id="${ids.summer}"]').click()`);
+  await chrome.waitFor(`document.getElementById('editDialog').open`);
+  await chrome.evaluate(clickText('#editForm', '删除搭配'));
+  await chrome.waitFor(`document.querySelectorAll('#outfitList .outfit-card').length === 1`);
+  assert.match(await chrome.evaluate(`window.__confirm`), /^这套搭配排在 1 天的计划里（\d+\/\d+），删除后那几天显示"搭配已删除"。删除这套搭配吗？/);
+  await chrome.evaluate(clickText('#views', '下周'));
+  await chrome.evaluate(clickText('#weekNav', '下周'));
+  await chrome.waitFor(`${dayRow(W.next[0])}?.querySelector('.day-empty.missing')?.textContent === '搭配已删除'`);
+
+  // 天气请求失败、没有缓存：提示失败，计划照常显示
+  await chrome.evaluate(storeCall(`s.setDevice({ weather: null })`));
+  await chrome.goto(`${server.origin}/tests/blank.html`);
+  await chrome.goto(`${server.origin}/?fakeWeather=fail#v=week`);
+  await chrome.waitFor(`document.documentElement.dataset.ready === '1' && document.getElementById('weatherMsg').textContent === '天气获取失败，计划照常可用'`);
+  assert.equal(await chrome.evaluate(`document.querySelectorAll('#weekList .day').length`), 7);
+  assert.equal(await chrome.evaluate(`${dayRow(W.next[0])}.querySelector('.day-weather').textContent`), '暂无预报');
+});

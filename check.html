@@ -26,6 +26,7 @@
 // 诊断页（2026-10-12，国内 Safari 下载模型报 "Load failed"：huggingface.co、hf-mirror.com 都打不开）：在用户浏览器里逐个 fetch 应用会用到的地址，看哪个失败。
 // 本站文件加 ?net 绕过 Service Worker 缓存（见 sw.js）。模型只取前 1 MB
 import { VENDOR, MATTING_MODEL, CLASSIFY_MODEL } from './config.js';
+import { forecastUrl } from './week.js';
 
 const MB = 1024 * 1024;
 const local = (f) => ({ name: `本站 ${f}`, url: `${VENDOR}${f}?net` });
@@ -37,6 +38,8 @@ const CHECKS = [
   // 分类模型：自己的仓库 closet-models（GitHub Pages）；抠图模型：只在 huggingface.co
   ...files(CLASSIFY_MODEL.hosts[0], CLASSIFY_MODEL.id, 'onnx/vision_model_q4f16.onnx'),
   ...files(MATTING_MODEL.hosts[0], MATTING_MODEL.id, 'onnx/model_quantized.onnx'),
+  // 天气预报（阶段 5，"下周"页）
+  { name: 'api.open-meteo.com 天气预报', url: forecastUrl() },
 ];
 
 async function check({ url, range }) {

@@ -63,3 +63,10 @@ export const ESTIMATE_MS = {
 
 // 同一张图失败（页面崩溃或模型报错）达到这个次数，标为抠图失败，保留原图
 export const MAX_ATTEMPTS = 2;
+
+// 天气（阶段 5）：Open-Meteo，免费、无密钥、允许非商用，CORS 开放（2026-10-18 核实）。署名"天气数据：Open-Meteo.com"（CC BY 4.0）。
+// 城市固定巴黎。季节推算按当天最高温：≥ hot 夏，< cold 冬，其余春秋。缓存超过 maxAgeMs 重新请求
+export const WEATHER = {
+  city: '巴黎', lat: 48.8566, lon: 2.3522, timezone: 'Europe/Paris',
+  hot: 24, cold: 12, maxAgeMs: 3 * 3600 * 1000, timeoutMs: 10000,
+};

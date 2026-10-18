@@ -109,7 +109,7 @@
 - 图片存储格式：长边缩到 1024，不存原图。有透明区域的图存 WebP；浏览器不能输出带透明的 WebP 时存 PNG。没有透明区域的图存 JPEG 0.9。启动时用 `image.js` 的 `probeWebpAlpha()` 检测，结果显示在页面"关于"区。
 - WebP 透明实测：Mac Chrome 155 可以；Mac Safari 27.0.1 不可以（`toBlob('image/webp')` 返回 `image/png`），所以 Safari 上透明图存 PNG。iPhone（iOS 27，2026-10-11 真机）：同样返回 `image/png`，透明图存 PNG。
 - 衣物记录字段见 `store.js` 的 `newItem()`：分类只存 `categoryId`、`subcategoryId`（来自 `taxonomy.js`），季节、场景的取值在 `options.js`。改了取值要考虑已存数据。
-- `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v4：`items` 衣物、`queue` 待确认照片、`meta` 任务状态 `job` 和本设备设置 `device`、`categories` 自建分类和改名/隐藏、`outfits` 搭配、`plans` 计划（阶段 5）、`thumbs` 缩略图）。改表结构必须升版本号并写迁移。例外：v1 → v2、v2 → v3 经用户确认直接清空，不迁移。
+- `store.js` 是唯一访问 IndexedDB 的模块（数据库 `closet` v4：`items` 衣物、`queue` 待确认照片、`meta` 任务状态 `job` 和本设备设置 `device`、`categories` 自建分类和改名/隐藏、`outfits` 搭配、`plans` 计划（阶段 5，每个日期一条）、`thumbs` 缩略图）。改表结构必须升版本号并写迁移。例外：v1 → v2、v2 → v3 经用户确认直接清空，不迁移。
 - 迁移规则（2026-10-15，v3 → v4 起）：`onupgradeneeded` 每个 `oldVersion < N` 分支只做上一版到这一版的变化；新装（oldVersion 0）依次执行全部分支。测试用旧版 `store.js` 原文作固件（`tests/fixtures/store-vN.js`，注明来源提交，只改 import 路径）建库写数据，再用新代码打开核对；另测从 0 建库。旧代码遇到更高版本（VersionError）时显示"有新版本，请刷新"并让 Service Worker 检查更新；被别的标签页挡住时提示关闭其他页面（`app.js` `openOrExplain`）。上线前提醒用户先导出备份（IndexedDB 不能降版本，回退要清空后导入备份）。
 - Service Worker 缓存名 `closet-vN`（`sw.js`）。改了任何应用文件，发布前把 N 加 1，否则用户手机上一直是旧版本。
 - Safari 坑（2026-10-11 确认）：从 IndexedDB 读出的 Blob 不能原样 put 回去，否则本次会话里该记录的图片读不出来（"The object can not be found here"，刷新后恢复）。`store.update()` 先复制成新 Blob 再写入。以后任何"读出再写回"带 Blob 的记录都要这样做。Chrome 不复现，只能在 Safari 验证。
@@ -176,6 +176,13 @@
 - `outfit.js` `fits` / `itemsForSlot` 接收分类表：自建一级按 `slot` 放进槽位，它的二级跟随。
 - 数据库、备份格式不变（分类表本来就整表导出；旧记录没有 `slot` = 不放进搭配）。
 
+### 阶段 5 下周穿搭（2026-10-18）
+- 页面切换第三个"下周"（hash `v=week`）。顶部"本周 / 下周"（只这两周，默认下周；周一到周日，今天是周日时下周从明天开始）。每天一行：日期、天气、搭配名称、合成图（`thumbs.js` `observeOutfit`）。过去的日子不能点。
+- 天气：Open-Meteo（免费、无密钥、非商用、CORS 开放，2026-10-18 核实），城市固定巴黎，参数在 `config.js` `WEATHER`。署名"天气数据：Open-Meteo.com"（CC BY 4.0）在"下周"页底部和"关于"。中国能否访问未知，已加进 `check.html`。
+- `week.js`：`weekDates`（用年月日分量算，避开夏令时）、`parseForecast`、`seasonsForTemp`（最高温 ≥ 24 夏、< 12 冬、其余春秋）、`rankOutfits`（适合 / 没季节信息 / 不合适，不隐藏）、`loadWeather`。缓存 `meta.device.weather = { fetchedAt, days }`（本机，不导出），3 小时内直接用；失败时用旧缓存并写"天气更新于…"，没缓存写"天气获取失败，计划照常可用"。失败后本页面 3 小时内不再重试（防止每次重画都请求）。测试 `?fakeWeather=1` / `?fakeWeather=fail`。
+- 计划每个日期最多一条（`store.setPlan(date, outfitId)`，null 删除；`plansBetween(from, to)`）。删除搭配前提示"排在 N 天的计划里"，计划保留 outfitId，那天显示"搭配已删除"。数据库、备份格式不变（plans 从 v2 起已导出）。
+- 截图：`node tools/shots.mjs <目录>` 的真实抠图部分加了 `390-real-week`、`1280-real-week`、`390-real-day`（下周一、二、四各排一套，假天气）。
+
 ### 配色（2026-10-11）
 - 阿根廷蓝白：`style.css` 顶部的变量。天蓝 `#74acdf` 用于国旗条和选中状态（配墨蓝字）；深蓝 `#1f5a8e` 用于操作按钮（白字）；金色 `#f6b40e` 只用在页头的五月太阳。页头是简化国旗（上下天蓝条 + 白底）。
 - 图标是白色衣架 + 天蓝底。iPhone 主屏幕图标要删掉后重新"添加到主屏幕"才会更新。
@@ -191,7 +198,7 @@
 | 标签向量 | `label-embeddings.json`（根目录，应用用） | – | `node tools/embed.mjs` 用 fashionSigLIP fp32 文本模型生成，内容来自 `taxonomy.js`。改了英文 prompt 必须重新生成，测试会检查。`spike/label-embeddings.json` 只给 spike 用 |
 
 ## 目录
-- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`backup.js` 备份 ZIP、`picker.js` 衣物选择器、`outfit.js` 搭配规则、`thumbs.js` 缩略图按需加载和搭配合成图、`layout.js` 搭配自动排版、`check.html` 网络检查、`sw.js`、`manifest.webmanifest`、`icons/`）。
+- 根目录：应用（`index.html`、`app.js` 界面、`store.js` 存储、`image.js` 图片处理、`options.js` 选项、`config.js` 配置、`queue.js` 抠图队列、`model-worker.js` 模型 Worker、`backup.js` 备份 ZIP、`picker.js` 衣物选择器、`outfit.js` 搭配规则、`thumbs.js` 缩略图按需加载和搭配合成图、`layout.js` 搭配自动排版、`week.js` 下周穿搭和天气、`check.html` 网络检查、`sw.js`、`manifest.webmanifest`、`icons/`）。
 - `vendor/`：第三方库（transformers.js、ONNX Runtime），见 `vendor/README.md`。
 - `docs/HISTORY.md`：PROGRESS.md 移出的旧记录。
 - `tests/`：`node --test tests/*.test.mjs`。`store.test.mjs` 测纯函数；`browser.test.mjs` 用 headless Chrome（CDP，`tests/cdp.mjs`，无依赖）测真实 IndexedDB、录入流程、抠图队列（假模型）和离线打开。模拟崩溃用"处理中直接重新打开页面"，不用 CDP `Page.crash`（装了 Service Worker 后崩溃后的导航不返回）。需要本机装有 Chrome。

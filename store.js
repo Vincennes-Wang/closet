@@ -212,6 +212,17 @@ export async function openStore(idbFactory = globalThis.indexedDB, { version = D
       await done;
     },
     listPlans: () => tx('readonly', (os) => req(os.getAll()), PLANS),
+    // 计划：每个日期最多一条（阶段 5）。日期 YYYY-MM-DD，含两端
+    plansBetween: (from, to) => tx('readonly', (os) => req(os.index('date').getAll(IDBKeyRange.bound(from, to))), PLANS),
+    // 给某天排搭配：已有记录就改（多出的删掉），outfitId 为 null 时删除这天的计划
+    setPlan: (date, outfitId, { now = Date.now() } = {}) => tx('readwrite', async (os) => {
+      const [first, ...extra] = await req(os.index('date').getAll(date));
+      for (const p of extra) os.delete(p.id);
+      if (!outfitId) { if (first) os.delete(first.id); return null; }
+      const p = validatePlan({ ...(first ?? { id: crypto.randomUUID(), createdAt: now }), date, outfitId });
+      os.put(p);
+      return p;
+    }, PLANS),
 
     // ---------- 抠图队列 ----------
     // 透明图（别处已抠好）直接算抠图完成，不再进模型

@@ -103,14 +103,32 @@ try {
         tank: await add(fromB64(real.tank), 'top', 'top.tank'), shoes: await add(shoes, 'shoes', 'shoes.sneakers'),
         skirt: await add(skirt, 'skirt', 'skirt.skirt'), bag: await add(bag, 'bag', null),
       };
-      await s.putOutfit({ name: '上衣 + 裤子 + 鞋', scenes: ['通勤'], slots: { top: id.shirt, bottom: id.pants, shoes: id.shoes } });
-      await s.putOutfit({ name: '外套 + 上衣 + 半身裙 + 鞋 + 包', scenes: ['休闲'], slots: { outer: id.jacket, top: id.tank, bottom: id.skirt, shoes: id.shoes, bag: id.bag } });
-      await s.putOutfit({ name: '连衣裙 + 鞋', scenes: ['出行'], slots: { onepiece: id.dress, shoes: id.shoes } });
+      const o1 = await s.putOutfit({ name: '上衣 + 裤子 + 鞋', scenes: ['通勤'], slots: { top: id.shirt, bottom: id.pants, shoes: id.shoes } });
+      const o2 = await s.putOutfit({ name: '外套 + 上衣 + 半身裙 + 鞋 + 包', scenes: ['休闲'], slots: { outer: id.jacket, top: id.tank, bottom: id.skirt, shoes: id.shoes, bag: id.bag } });
+      const o3 = await s.putOutfit({ name: '连衣裙 + 鞋', scenes: ['出行'], slots: { onepiece: id.dress, shoes: id.shoes } });
+      // 下周穿搭（阶段 5）：下周一、二、四各排一套
+      const { weekDates } = await import('/week.js');
+      const next = weekDates(new Date(), 1);
+      await s.setPlan(next[0], o1.id); await s.setPlan(next[1], o2.id); await s.setPlan(next[3], o3.id);
       s.close();
     })()`);
-    for (const [name, w, h, mobile, edit] of [['390-real-outfits', 390, 844, true], ['1280-real-outfits', 1280, 800, false], ['390-real-edit', 390, 844, true, true], ['390-real-adjust', 390, 844, true, 'adjust']]) {
+    for (const [name, w, h, mobile, edit] of [['390-real-outfits', 390, 844, true], ['1280-real-outfits', 1280, 800, false], ['390-real-edit', 390, 844, true, true], ['390-real-adjust', 390, 844, true, 'adjust'],
+      ['390-real-week', 390, 844, true, 'week'], ['1280-real-week', 1280, 800, false, 'week'], ['390-real-day', 390, 844, true, 'day']]) {
       await chrome.screenshot(w, h, { mobile });
       await chrome.goto(`${server.origin}/tests/blank.html`);
+      if (edit === 'week' || edit === 'day') { // 下周穿搭，天气用假数据
+        await chrome.goto(`${server.origin}/?fakeWeather=1#v=week`);
+        await chrome.waitFor(`[...document.querySelectorAll('#weekList .day-outfit img')].length === 3 && [...document.querySelectorAll('#weekList img')].every((i) => i.complete && i.naturalWidth)
+          && document.querySelector('#weekList .day-weather').textContent.includes('°')`, 30000);
+        await chrome.evaluate(`document.getElementById('views').scrollIntoView()`);
+        if (edit === 'day') {
+          await chrome.evaluate(`document.querySelector('#weekList .day').click()`);
+          await chrome.waitFor(`document.querySelectorAll('#editForm .outfit-img').length === 3 && [...document.querySelectorAll('#editForm .outfit-img')].slice(0, 2).every((i) => i.complete && i.naturalWidth)`, 30000);
+        }
+        await writeFile(join(out, `${name}.png`), await chrome.screenshot(w, h, { mobile }));
+        console.log(join(out, `${name}.png`));
+        continue;
+      }
       await chrome.goto(`${server.origin}/#v=outfits`);
       await chrome.waitFor(`[...document.querySelectorAll('#outfitList .outfit-img')].length === 3 && [...document.querySelectorAll('#outfitList .outfit-img')].every((i) => i.complete && i.naturalWidth)`, 30000);
       await chrome.evaluate(`document.getElementById('views').scrollIntoView()`);

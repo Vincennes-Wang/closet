@@ -6,8 +6,9 @@ import { SLOTS, getSlot, itemsForSlot, taxonomyForSlot, slotState, outfitError, 
 import { createImageLoader } from './thumbs.js';
 import { hitTest, moveBy, setSize, setRotation, shiftLayer, resetSlot } from './layout.js';
 import { prepareImage, probeWebpAlpha, makeThumb } from './image.js';
-import { THUMB_SIDE, RESULTS_DELAY_MS } from './config.js';
+import { THUMB_SIDE, RESULTS_DELAY_MS, WEATHER } from './config.js';
 import { buildBackup, parseBackup } from './backup.js';
+import { ymd, weekDates, dayLabel, seasonsForTemp, weatherIcon, rankOutfits, upcomingPlansUsing, loadWeather } from './week.js';
 import {
   startJob, pauseJob, continueJob, cancelJob, summarize, resumeQueue, eventLines, noteResultsLoad, noteWait, noteResultsShown,
   guessBackend, estimateMs, remainingMs, minutesText,
@@ -165,22 +166,25 @@ function renderGroups(container, items) {
       el('div', { className: 'grid' }, ...g.items.map(tile)))));
 }
 
-// ---------- 页面切换（衣橱 / 搭配）和 URL hash ----------
-// hash = 当前页面（v=outfits）+ 衣橱筛选（picker.js filterParams）。抠图队列自动刷新后仍在
-let view = new URLSearchParams(location.hash.slice(1)).get('v') === 'outfits' ? 'outfits' : 'closet';
+// ---------- 页面切换（衣橱 / 搭配 / 下周）和 URL hash ----------
+// hash = 当前页面（v=outfits、v=week）+ 衣橱筛选（picker.js filterParams）。抠图队列自动刷新后仍在
+const VIEWS = ['closet', 'outfits', 'week'];
+let view = new URLSearchParams(location.hash.slice(1)).get('v');
+if (!VIEWS.includes(view)) view = 'closet';
 function writeHash() {
   const p = picker ? filterParams(picker.getFilter()) : new URLSearchParams(location.hash.slice(1));
-  if (view === 'outfits') p.set('v', 'outfits'); else p.delete('v');
+  if (view !== 'closet') p.set('v', view); else p.delete('v');
   const h = p.toString();
   history.replaceState(null, '', location.pathname + location.search + (h ? `#${h}` : ''));
 }
 function showView(v) {
   view = v;
   document.body.classList.toggle('view-outfits', v === 'outfits');
+  document.body.classList.toggle('view-week', v === 'week');
   for (const b of document.querySelectorAll('#views button')) b.setAttribute('aria-pressed', String(b.dataset.v === v));
   writeHash();
-  if (v === 'outfits') renderOutfits();
-  else $('outfitList').replaceChildren();
+  if (v === 'outfits') renderOutfits(); else $('outfitList').replaceChildren();
+  if (v === 'week') renderWeek(); else $('weekList').replaceChildren();
   images.sweep();
 }
 for (const b of document.querySelectorAll('#views button')) b.addEventListener('click', () => showView(b.dataset.v));
@@ -217,6 +221,7 @@ async function render() {
   else $('archived').replaceChildren();
   images.sweep();
   if (view === 'outfits') renderOutfits();
+  if (view === 'week') renderWeek();
 }
 $('archivedBtn').addEventListener('click', () => { showArchived = !showArchived; render(); });
 
@@ -365,26 +370,29 @@ function slotThumb(id, byId) {
   return el('span', { className: `slot-missing ${state ?? 'empty'}`, textContent: STATE_TEXT[state] ?? '' });
 }
 
+// 搭配卡片：名称、场景 · 季节、合成图（thumbs.js，按需生成并缓存）；已删除、已归档的衣物不画，另起一行写明。
+// 搭配页和"下周"选搭配共用；tag：卡片顶部的标签（如"适合"）
+function outfitCard(o, byId, onclick, tag = '') {
+  const seasons = outfitSeasons(o, byId);
+  const counts = {};
+  for (const s of SLOTS) { const st = slotState(o.slots[s.id], byId); if (STATE_TEXT[st]) counts[st] = (counts[st] ?? 0) + 1; }
+  const missing = Object.entries(counts).map(([st, n]) => `${n} 件${STATE_TEXT[st]}`).join('，');
+  const img = el('img', { className: 'outfit-img', alt: o.name || '搭配' });
+  images.observeOutfit(img, o, byId);
+  const card = el('button', { type: 'button', className: 'outfit-card', onclick },
+    tag ? el('span', { className: 'fit-tag', textContent: tag }) : '',
+    el('span', { className: 'outfit-name', textContent: o.name || '未命名搭配' }),
+    el('span', { className: 'muted', textContent: [o.scenes.join('、'), seasons.join('')].filter(Boolean).join(' · ') || ' ' }),
+    img,
+    missing ? el('span', { className: 'outfit-missing', textContent: missing }) : '');
+  card.dataset.id = o.id;
+  return card;
+}
+
 async function renderOutfits() {
   const [outfits, all] = await Promise.all([store.listOutfits(), store.list({ includeArchived: true })]);
   const byId = new Map(all.map((i) => [i.id, i]));
-  // 每套一张合成图（thumbs.js，按需生成并缓存）；已删除、已归档的衣物不画，另起一行写明
-  const cards = outfits.map((o) => {
-    const seasons = outfitSeasons(o, byId);
-    const counts = {};
-    for (const s of SLOTS) { const st = slotState(o.slots[s.id], byId); if (STATE_TEXT[st]) counts[st] = (counts[st] ?? 0) + 1; }
-    const missing = Object.entries(counts).map(([st, n]) => `${n} 件${STATE_TEXT[st]}`).join('，');
-    const img = el('img', { className: 'outfit-img', alt: o.name || '搭配' });
-    images.observeOutfit(img, o, byId);
-    const card = el('button', { type: 'button', className: 'outfit-card', onclick: () => openOutfit(o) },
-      el('span', { className: 'outfit-name', textContent: o.name || '未命名搭配' }),
-      el('span', { className: 'muted', textContent: [o.scenes.join('、'), seasons.join('')].filter(Boolean).join(' · ') || ' ' }),
-      img,
-      missing ? el('span', { className: 'outfit-missing', textContent: missing }) : '');
-    card.dataset.id = o.id;
-    return card;
-  });
-  $('outfitList').replaceChildren(...cards);
+  $('outfitList').replaceChildren(...outfits.map((o) => outfitCard(o, byId, () => openOutfit(o))));
   $('outfitsEmpty').hidden = outfits.length > 0;
   images.sweep();
 }
@@ -547,11 +555,105 @@ async function openOutfit(saved) {
     try { await store.putOutfit(layout ? { ...rest, layout } : rest); close(); renderOutfits(); } catch (e) { msg.textContent = e.message; }
   }
   async function remove() {
-    if (!confirm('删除这套搭配吗？衣物不受影响。')) return;
+    const used = upcomingPlansUsing(saved.id, await store.listPlans(), ymd(new Date()));
+    const planText = used.length ? `这套搭配排在 ${used.length} 天的计划里（${used.map((p) => dayLabel(p.date).md).join('、')}），删除后那几天显示"搭配已删除"。` : '';
+    if (!confirm(`${planText}删除这套搭配吗？衣物不受影响。`)) return;
     await store.removeOutfit(saved.id); close(); renderOutfits();
   }
 
   editor();
+  dialog.showModal();
+  dialog.focus();
+}
+
+// ---------- 下周穿搭（阶段 5） ----------
+// 每天一行：日期、天气（Open-Meteo，week.js）、当天搭配。点某天在弹窗里选搭配（按天气季节排序）。过去的日子只能看
+const fakeWeather = new URLSearchParams(location.search).get('fakeWeather'); // 测试用：1 = 假数据，fail = 请求失败
+let weekOffset = 1; // 0 本周，1 下周
+let weather = null; // { days, fetchedAt, stale }，null = 还没取
+let weatherLoading = null;
+let weatherTriedAt = 0; // 上次请求的时间。失败后不马上重试（否则每次重画都请求），过 maxAgeMs 或刷新页面再试
+const fmtTime = (ms) => { const d = new Date(ms); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+// 先用缓存画，缓存过期就后台请求，回来后重画
+function refreshWeather() {
+  weatherTriedAt = Date.now();
+  weatherLoading ??= loadWeather(store, { fake: fakeWeather })
+    .then((w) => { weather = w; if (view === 'week') renderWeek(); })
+    .finally(() => { weatherLoading = null; });
+}
+
+function weatherLine(day) {
+  if (!day) return [el('span', { className: 'muted', textContent: '暂无预报' })];
+  const w = weatherIcon(day.code);
+  return [el('span', { textContent: `${w.icon} ${Math.round(day.min)}–${Math.round(day.max)}°` }),
+    day.rain == null ? '' : el('span', { className: day.rain >= 50 ? 'rain' : 'muted', textContent: `${day.rain >= 50 ? '☔ ' : ''}降水 ${day.rain}%` })];
+}
+
+async function renderWeek() {
+  const now = new Date(), today = ymd(now);
+  const dates = weekDates(now, weekOffset);
+  for (const b of document.querySelectorAll('#weekNav button')) b.setAttribute('aria-pressed', String(Number(b.dataset.w) === weekOffset));
+  const [plans, outfits, all] = await Promise.all([store.plansBetween(dates[0], dates[6]), store.listOutfits(), store.list({ includeArchived: true })]);
+  const byId = new Map(all.map((i) => [i.id, i]));
+  const outfitById = new Map(outfits.map((o) => [o.id, o]));
+  const planOf = new Map(plans.map((p) => [p.date, p]));
+  const days = weather?.days ?? {};
+  $('weatherMsg').textContent = !weather ? '正在获取天气…'
+    : !weather.days ? '天气获取失败，计划照常可用'
+    : weather.stale ? `天气更新于 ${fmtTime(weather.fetchedAt)}（获取最新预报失败）` : '';
+  const rows = dates.map((date) => {
+    const { weekday, md } = dayLabel(date);
+    const past = date < today;
+    const plan = planOf.get(date);
+    const outfit = plan && outfitById.get(plan.outfitId);
+    let right, name = '';
+    if (outfit) {
+      const img = el('img', { alt: outfit.name || '搭配' });
+      images.observeOutfit(img, outfit, byId);
+      right = el('span', { className: 'day-outfit' }, img);
+      name = outfit.name ? el('span', { className: 'day-name', textContent: outfit.name }) : '';
+    } else if (plan) right = el('span', { className: 'day-outfit' }, el('span', { className: 'day-empty missing', textContent: '搭配已删除' }));
+    else right = el('span', { className: 'day-outfit' }, el('span', { className: 'day-empty', textContent: past ? '' : '选搭配' }));
+    const row = el('button', { type: 'button', className: `day${past ? ' past' : ''}${date === today ? ' today' : ''}`, disabled: past,
+      onclick: () => openDay(date) },
+      el('span', { className: 'day-date' }, el('b', { textContent: date === today ? '今天' : weekday }), el('span', { className: 'muted', textContent: md })),
+      el('span', { className: 'day-weather' }, ...(past ? [] : weatherLine(days[date])), name),
+      right);
+    row.dataset.date = date;
+    return row;
+  });
+  $('weekList').replaceChildren(...rows);
+  images.sweep();
+  if (!weatherLoading && Date.now() - weatherTriedAt >= WEATHER.maxAgeMs) refreshWeather();
+}
+for (const b of document.querySelectorAll('#weekNav button')) b.addEventListener('click', () => { weekOffset = Number(b.dataset.w); renderWeek(); });
+
+// 给某天选搭配：适合当天天气的排前面（标"适合"），不合适的排后面变淡，不隐藏
+async function openDay(date) {
+  const dialog = $('editDialog');
+  const [outfits, all, [plan]] = await Promise.all([store.listOutfits(), store.list({ includeArchived: true }), store.plansBetween(date, date)]);
+  const byId = new Map(all.map((i) => [i.id, i]));
+  const day = weather?.days?.[date];
+  const seasons = day ? seasonsForTemp(day.max) : null;
+  const ranked = seasons ? rankOutfits(outfits, seasons, byId) : outfits.map((outfit) => ({ outfit, fit: 'unknown' }));
+  const { weekday, md } = dayLabel(date);
+  const close = () => { dialog.close(); images.sweep(); renderWeek(); };
+  const choose = async (outfitId) => { await store.setPlan(date, outfitId); close(); };
+  const cards = ranked.map(({ outfit, fit }) => {
+    const card = outfitCard(outfit, byId, () => choose(outfit.id), fit === 'yes' ? '适合' : '');
+    if (fit === 'no') card.classList.add('unfit');
+    card.setAttribute('aria-pressed', String(plan?.outfitId === outfit.id));
+    return card;
+  });
+  const w = day && weatherIcon(day.code);
+  $('editForm').replaceChildren(
+    el('h2', { textContent: `${weekday} ${md}${day ? ` · ${w.icon} ${Math.round(day.min)}–${Math.round(day.max)}°` : ''}` }),
+    el('p', { className: 'muted', textContent: seasons ? `按天气适合${seasons.join('、')}季的搭配排在前面。` : '没有这天的天气预报。' }),
+    cards.length ? el('div', { className: 'outfit-list' }, ...cards) : el('p', { className: 'muted', textContent: '还没有搭配。先到"搭配"页新建。' }),
+    el('div', { className: 'actions' },
+      plan ? el('button', { type: 'button', className: 'danger', textContent: '清空这天', onclick: () => choose(null) }) : '',
+      el('button', { type: 'button', textContent: '取消', onclick: close })));
   dialog.showModal();
   dialog.focus();
 }
