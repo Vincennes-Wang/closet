@@ -1,6 +1,6 @@
 # PROGRESS
 - 状态：进行中
-- 当前阶段：4c 前的分类和槽位小改已上线；下一步 4c 分类管理界面
+- 当前阶段：4d 搭配自动排版（计划中）
 - 累计用时：约 18（用户报）（工作 24 次）
 - 线上地址：https://vincennes-wang.github.io/closet/（应用）、https://vincennes-wang.github.io/closet/check.html（网络检查）、https://vincennes-wang.github.io/closet-models/（模型）
 
@@ -14,7 +14,7 @@
   - `node tools/eval.mjs`（22 张样本）：第一版卫衣 prompt 把 2 张拉链连帽衫判成卫衣，top-1 降到 18/22；改 prompt 后 top-1 20/22（91%）、top-3 22/22（100%，上次 21/22）。样本里没有卫衣和短裤，这两类的效果还没验证。
 
 ## 下次从这里继续
-1. 4c 分类管理界面开始前用 Plan mode 给计划（规则见 CLAUDE.md「分类规则」；自建一级分类放不放进搭配槽位要决定）。
+1. 4d 搭配自动排版（Plan mode 给计划）。之后 4e 手动调整（待定）→ 4c 分类管理（自建一级分类放不放进搭配槽位要决定）。
 
 ## 未解决问题
 - 完整测试偶发一次失败（3 次中 1 次）：`应用：选图进队列…` 等待 `#lastJob` 超时；单独重跑 3 次都通过，原因未确认。再出现时先保存该次 `job.events` 时间线看卡在哪一步。
